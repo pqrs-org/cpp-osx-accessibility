@@ -1,6 +1,6 @@
 #pragma once
 
-// pqrs::osx::Accessibility v0.0
+// pqrs::osx::Accessibility v1.0
 
 // (C) Copyright Takayama Fumihiko 2021.
 // Distributed under the Boost Software License, Version 1.0.
