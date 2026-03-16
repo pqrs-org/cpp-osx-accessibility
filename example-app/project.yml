@@ -1,0 +1,34 @@
+name: AccessibilityMonitorExample
+options:
+  bundleIdPrefix: org.pqrs
+
+targets:
+  AccessibilityMonitorExample:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: src/AppDelegate.h
+      - path: src/AppDelegate.mm
+        compilerFlags:
+          - -Wall
+          - -Werror
+          - -fobjc-arc
+          - -fmodules
+          - "-std=c++23"
+      - path: src/main.m
+        compilerFlags:
+          - -Wall
+          - -Werror
+          - -fobjc-arc
+          - -fmodules
+      - path: ../src
+    settings:
+      base:
+        INFOPLIST_FILE: Resources/Info.plist
+        OTHER_SWIFT_FLAGS: "-warnings-as-errors"
+        PRODUCT_BUNDLE_IDENTIFIER: org.pqrs.AccessibilityMonitorExample
+        SWIFT_OBJC_BRIDGING_HEADER: ../include/pqrs/osx/accessibility/impl/Bridging-Header.h
+        SYSTEM_HEADER_SEARCH_PATHS:
+          - ../include
+          - ../vendor/vendor/include
