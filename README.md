@@ -3,7 +3,7 @@
 
 # cpp-osx-accessibility
 
-Utilities of `Carbon accessibility API`.
+Utilities of macOS accessibility APIs.
 
 ## Requirements
 
@@ -14,3 +14,8 @@ cpp-osx-accessibility depends the following classes.
 ## Install
 
 Copy `include/pqrs` and `vendor/vendor/include` directories into your include directory.
+
+And then configure your project as follows:
+
+- `src/pqrs/osx/accessibility/PQRSOSXAccessibilityMonitorImpl.swift`
+- `include/pqrs/osx/accessibility/impl/Bridging-Header.h` as Bridging Header
