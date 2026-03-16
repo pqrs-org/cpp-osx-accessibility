@@ -10,6 +10,7 @@ Utilities of macOS accessibility APIs.
 cpp-osx-accessibility depends the following classes.
 
 - [pqrs::cf::dictionary](https://github.com/pqrs-org/cpp-cf-dictionary).
+- [pqrs::dispatcher](https://github.com/pqrs-org/cpp-dispatcher).
 
 ## Install
 
