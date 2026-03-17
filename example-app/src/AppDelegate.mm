@@ -60,18 +60,14 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
     monitor->frontmost_application_changed.connect([appDelegate](auto&& application_ptr) {
       NSMutableArray<NSString*>* lines = [NSMutableArray array];
 
-      if (!application_ptr) {
-        [lines addObject:@"Application: none"];
-      } else {
-        NSString* name = makeUTF8String(application_ptr->get_name(), @"(unknown)");
-        [lines addObject:[NSString stringWithFormat:@"Application: %@", name]];
+      NSString* name = makeUTF8String(application_ptr->get_name(), @"(unknown)");
+      [lines addObject:[NSString stringWithFormat:@"Application: %@", name]];
 
-        if (auto& bundleIdentifier = application_ptr->get_bundle_identifier()) {
-          [lines addObject:[NSString stringWithFormat:@"Bundle ID: %@", makeUTF8String(bundleIdentifier)]];
-        }
-        if (auto& pid = application_ptr->get_pid()) {
-          [lines addObject:[NSString stringWithFormat:@"PID: %d", *pid]];
-        }
+      if (auto& bundleIdentifier = application_ptr->get_bundle_identifier()) {
+        [lines addObject:[NSString stringWithFormat:@"Bundle ID: %@", makeUTF8String(bundleIdentifier)]];
+      }
+      if (auto& pid = application_ptr->get_pid()) {
+        [lines addObject:[NSString stringWithFormat:@"PID: %d", *pid]];
       }
 
       NSString* text = [lines componentsJoinedByString:@"\n"];
@@ -85,31 +81,27 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
       NSString* roleText = nil;
       NSString* detailText = @"";
 
-      if (!focused_ui_element_ptr) {
-        roleText = @"Focused element: none";
-      } else {
-        NSString* role = makeUTF8String(focused_ui_element_ptr->get_role(), @"(unknown)");
-        NSString* subrole = makeUTF8String(focused_ui_element_ptr->get_subrole());
-        roleText = subrole.length > 0
-                       ? [NSString stringWithFormat:@"Focused element: %@ / %@", role, subrole]
-                       : [NSString stringWithFormat:@"Focused element: %@", role];
+      NSString* role = makeUTF8String(focused_ui_element_ptr->get_role(), @"(unknown)");
+      NSString* subrole = makeUTF8String(focused_ui_element_ptr->get_subrole());
+      roleText = subrole.length > 0
+                     ? [NSString stringWithFormat:@"Focused element: %@ / %@", role, subrole]
+                     : [NSString stringWithFormat:@"Focused element: %@", role];
 
-        NSMutableArray<NSString*>* lines = [NSMutableArray array];
-        if (auto& roleDescription = focused_ui_element_ptr->get_role_description()) {
-          [lines addObject:[NSString stringWithFormat:@"Role description: %@", makeUTF8String(roleDescription)]];
-        }
-        if (auto& title = focused_ui_element_ptr->get_title()) {
-          [lines addObject:[NSString stringWithFormat:@"Title: %@", makeUTF8String(title)]];
-        }
-        if (auto& description = focused_ui_element_ptr->get_description()) {
-          [lines addObject:[NSString stringWithFormat:@"Description: %@", makeUTF8String(description)]];
-        }
-        if (auto& identifier = focused_ui_element_ptr->get_identifier()) {
-          [lines addObject:[NSString stringWithFormat:@"Identifier: %@", makeUTF8String(identifier)]];
-        }
-
-        detailText = [lines componentsJoinedByString:@"\n"];
+      NSMutableArray<NSString*>* lines = [NSMutableArray array];
+      if (auto& roleDescription = focused_ui_element_ptr->get_role_description()) {
+        [lines addObject:[NSString stringWithFormat:@"Role description: %@", makeUTF8String(roleDescription)]];
       }
+      if (auto& title = focused_ui_element_ptr->get_title()) {
+        [lines addObject:[NSString stringWithFormat:@"Title: %@", makeUTF8String(title)]];
+      }
+      if (auto& description = focused_ui_element_ptr->get_description()) {
+        [lines addObject:[NSString stringWithFormat:@"Description: %@", makeUTF8String(description)]];
+      }
+      if (auto& identifier = focused_ui_element_ptr->get_identifier()) {
+        [lines addObject:[NSString stringWithFormat:@"Identifier: %@", makeUTF8String(identifier)]];
+      }
+
+      detailText = [lines componentsJoinedByString:@"\n"];
 
       dispatch_async(dispatch_get_main_queue(), ^{
         appDelegate.roleLabel.stringValue = roleText;
