@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
+      - name: brew install
+        run: brew install xcodegen
       - name: example
         run: make -C example
       - name: example-app
