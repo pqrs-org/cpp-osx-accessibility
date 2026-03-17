@@ -10,32 +10,39 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <nod/nod.hpp>
 #include <optional>
+#include <pqrs/dispatcher.hpp>
 
 namespace pqrs {
 namespace osx {
 namespace accessibility {
-class monitor final {
+class monitor final : public dispatcher::extra::dispatcher_client {
 public:
-  using frontmost_application_changed_callback = std::function<void(std::shared_ptr<application>)>;
-  using focused_ui_element_changed_callback = std::function<void(std::shared_ptr<focused_ui_element>)>;
+  // Signals (invoked from the dispatcher thread)
+
+  nod::signal<void(std::shared_ptr<application>)> frontmost_application_changed;
+  nod::signal<void(std::shared_ptr<focused_ui_element>)> focused_ui_element_changed;
 
 private:
   monitor(const monitor&) = delete;
 
-  monitor() {
+  monitor(std::weak_ptr<dispatcher::dispatcher> weak_dispatcher)
+      : dispatcher_client(weak_dispatcher) {
     pqrs_osx_accessibility_monitor_set_callback(static_cpp_callback);
   }
 
 public:
   virtual ~monitor() {
     pqrs_osx_accessibility_monitor_unset_callback();
+
+    detach_from_dispatcher();
   }
 
-  static void initialize_shared_monitor() {
+  static void initialize_shared_monitor(std::weak_ptr<dispatcher::dispatcher> weak_dispatcher) {
     std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
 
-    shared_monitor_ = std::shared_ptr<monitor>(new monitor());
+    shared_monitor_ = std::shared_ptr<monitor>(new monitor(weak_dispatcher));
   }
 
   static void terminate_shared_monitor() {
@@ -44,26 +51,16 @@ public:
     shared_monitor_ = nullptr;
   }
 
+  // Return a weak_ptr instead of a shared_ptr to keep the use_count of shared_monitor_ as close to 1 as possible,
+  // ensuring that terminate_shared_monitor will properly release shared_monitor_.
   static std::weak_ptr<monitor> get_shared_monitor() {
     std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
 
     return shared_monitor_;
   }
 
-  void set_frontmost_application_changed_callback(frontmost_application_changed_callback callback) {
-    std::lock_guard<std::mutex> guard(mutex_);
-
-    frontmost_application_changed_callback_ = std::move(callback);
-  }
-
-  void set_focused_ui_element_changed_callback(focused_ui_element_changed_callback callback) {
-    std::lock_guard<std::mutex> guard(mutex_);
-
-    focused_ui_element_changed_callback_ = std::move(callback);
-  }
-
-  // Retrieves a snapshot of the current state and invokes the callbacks.
-  // A typical use is to call this right after setting the callbacks.
+  // Retrieves a snapshot of the current state and invokes the signals.
+  // A typical use is to call this right after setting the signals.
   void trigger() {
     pqrs_osx_accessibility_monitor_trigger();
   }
@@ -97,81 +94,60 @@ private:
     }
   }
 
-  static std::optional<application> make_application(const char* application_name,
-                                                     const char* bundle_identifier,
-                                                     const char* bundle_path,
-                                                     const char* file_path,
-                                                     pid_t pid) {
-    application value;
-    auto has_value = false;
+  static std::shared_ptr<application> make_application(const char* application_name,
+                                                       const char* bundle_identifier,
+                                                       const char* bundle_path,
+                                                       const char* file_path,
+                                                       pid_t pid) {
+    auto result = std::make_shared<application>();
 
     if (application_name) {
-      value.set_name(application_name);
-      has_value = true;
+      result->set_name(application_name);
     }
     if (bundle_identifier) {
-      value.set_bundle_identifier(bundle_identifier);
-      has_value = true;
+      result->set_bundle_identifier(bundle_identifier);
     }
     if (bundle_path) {
-      value.set_bundle_path(bundle_path);
-      has_value = true;
+      result->set_bundle_path(bundle_path);
     }
     if (file_path) {
-      value.set_file_path(file_path);
-      has_value = true;
+      result->set_file_path(file_path);
     }
     if (pid != 0) {
-      value.set_pid(pid);
-      has_value = true;
+      result->set_pid(pid);
     }
 
-    if (has_value) {
-      return value;
-    }
-
-    return std::nullopt;
+    return result;
   }
 
-  static std::optional<focused_ui_element> make_focused_ui_element(const char* role,
-                                                                   const char* subrole,
-                                                                   const char* role_description,
-                                                                   const char* title,
-                                                                   const char* description,
-                                                                   const char* identifier) {
-    focused_ui_element value;
-    auto has_value = false;
+  static std::shared_ptr<focused_ui_element> make_focused_ui_element(const char* role,
+                                                                     const char* subrole,
+                                                                     const char* role_description,
+                                                                     const char* title,
+                                                                     const char* description,
+                                                                     const char* identifier) {
+    auto result = std::make_shared<focused_ui_element>();
 
     if (role) {
-      value.set_role(role);
-      has_value = true;
+      result->set_role(role);
     }
     if (subrole) {
-      value.set_subrole(subrole);
-      has_value = true;
+      result->set_subrole(subrole);
     }
     if (role_description) {
-      value.set_role_description(role_description);
-      has_value = true;
+      result->set_role_description(role_description);
     }
     if (title) {
-      value.set_title(title);
-      has_value = true;
+      result->set_title(title);
     }
     if (description) {
-      value.set_description(description);
-      has_value = true;
+      result->set_description(description);
     }
     if (identifier) {
-      value.set_identifier(identifier);
-      has_value = true;
+      result->set_identifier(identifier);
     }
 
-    if (has_value) {
-      return value;
-    }
-
-    return std::nullopt;
+    return result;
   }
 
   void cpp_callback(int32_t force,
@@ -186,12 +162,12 @@ private:
                     const char* title,
                     const char* description,
                     const char* identifier) {
-    // `force` is non-zero when trigger() explicitly requests callbacks even if the snapshot is unchanged.
     auto current_application = make_application(application_name,
                                                 bundle_identifier,
                                                 bundle_path,
                                                 file_path,
                                                 pid);
+
     auto current_focused_ui_element = make_focused_ui_element(role,
                                                               subrole,
                                                               role_description,
@@ -199,48 +175,25 @@ private:
                                                               description,
                                                               identifier);
 
-    frontmost_application_changed_callback application_callback;
-    focused_ui_element_changed_callback focused_ui_element_callback;
-    std::shared_ptr<application> application_ptr;
-    std::shared_ptr<focused_ui_element> focused_ui_element_ptr;
-
-    {
-      std::lock_guard<std::mutex> guard(mutex_);
-
+    enqueue_to_dispatcher([this, force, current_application, current_focused_ui_element] {
+      // `force` is non-zero when trigger() explicitly requests callbacks even if the snapshot is unchanged.
       if (force != 0 || last_application_ != current_application) {
         last_application_ = current_application;
-        application_callback = frontmost_application_changed_callback_;
-        if (current_application) {
-          application_ptr = std::make_shared<application>(*current_application);
-        }
+        frontmost_application_changed(current_application);
       }
 
       if (force != 0 || last_focused_ui_element_ != current_focused_ui_element) {
         last_focused_ui_element_ = current_focused_ui_element;
-        focused_ui_element_callback = focused_ui_element_changed_callback_;
-        if (current_focused_ui_element) {
-          focused_ui_element_ptr = std::make_shared<focused_ui_element>(*current_focused_ui_element);
-        }
+        focused_ui_element_changed(current_focused_ui_element);
       }
-    }
-
-    if (application_callback) {
-      application_callback(application_ptr);
-    }
-
-    if (focused_ui_element_callback) {
-      focused_ui_element_callback(focused_ui_element_ptr);
-    }
+    });
   }
 
-  inline static std::shared_ptr<monitor> shared_monitor_;
-  inline static std::mutex shared_monitor_mutex_;
+  static inline std::shared_ptr<monitor> shared_monitor_;
+  static inline std::mutex shared_monitor_mutex_;
 
-  std::mutex mutex_;
-  frontmost_application_changed_callback frontmost_application_changed_callback_;
-  focused_ui_element_changed_callback focused_ui_element_changed_callback_;
-  std::optional<application> last_application_;
-  std::optional<focused_ui_element> last_focused_ui_element_;
+  std::shared_ptr<application> last_application_;
+  std::shared_ptr<focused_ui_element> last_focused_ui_element_;
 };
 } // namespace accessibility
 } // namespace osx

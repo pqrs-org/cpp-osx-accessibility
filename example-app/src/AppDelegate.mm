@@ -13,6 +13,18 @@ NSTextField* makeLabel(NSRect frame, CGFloat fontSize, NSColor* color) {
   label.lineBreakMode = NSLineBreakByTruncatingTail;
   return label;
 }
+
+NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fallback = @"") {
+  if (!value) {
+    return fallback;
+  }
+
+  if (auto string = [NSString stringWithUTF8String:value->c_str()]) {
+    return string;
+  }
+
+  return fallback;
+}
 } // namespace
 
 @interface AppDelegate ()
@@ -22,7 +34,6 @@ NSTextField* makeLabel(NSRect frame, CGFloat fontSize, NSColor* color) {
 @property(strong) NSTextField* applicationLabel;
 @property(strong) NSTextField* roleLabel;
 @property(strong) NSTextField* detailLabel;
-@property std::shared_ptr<pqrs::osx::accessibility::monitor> monitor;
 
 @end
 
@@ -40,83 +51,81 @@ NSTextField* makeLabel(NSRect frame, CGFloat fontSize, NSColor* color) {
     self.permissionLabel.stringValue = @"Accessibility permission is granted.";
   }
 
-  pqrs::osx::accessibility::monitor::initialize_shared_monitor();
-  self.monitor = pqrs::osx::accessibility::monitor::get_shared_monitor().lock();
+  pqrs::dispatcher::extra::initialize_shared_dispatcher();
+  pqrs::osx::accessibility::monitor::initialize_shared_monitor(pqrs::dispatcher::extra::get_shared_dispatcher());
 
-  if (!self.monitor) {
-    return;
-  }
+  if (auto monitor = pqrs::osx::accessibility::monitor::get_shared_monitor().lock()) {
+    AppDelegate* appDelegate = self;
 
-  AppDelegate* appDelegate = self;
-
-  self.monitor->set_frontmost_application_changed_callback([appDelegate](auto&& application_ptr) {
-    NSMutableArray<NSString*>* lines = [NSMutableArray array];
-
-    if (!application_ptr) {
-      [lines addObject:@"Application: none"];
-    } else {
-      NSString* name = application_ptr->get_name() ? [NSString stringWithUTF8String:application_ptr->get_name()->c_str()] : @"(unknown)";
-      [lines addObject:[NSString stringWithFormat:@"Application: %@", name]];
-
-      if (auto& bundleIdentifier = application_ptr->get_bundle_identifier()) {
-        [lines addObject:[NSString stringWithFormat:@"Bundle ID: %s", bundleIdentifier->c_str()]];
-      }
-      if (auto& pid = application_ptr->get_pid()) {
-        [lines addObject:[NSString stringWithFormat:@"PID: %d", *pid]];
-      }
-    }
-
-    NSString* text = [lines componentsJoinedByString:@"\n"];
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-      appDelegate.applicationLabel.stringValue = text;
-    });
-  });
-
-  self.monitor->set_focused_ui_element_changed_callback([appDelegate](auto&& focused_ui_element_ptr) {
-    NSString* roleText = nil;
-    NSString* detailText = @"";
-
-    if (!focused_ui_element_ptr) {
-      roleText = @"Focused element: none";
-    } else {
-      NSString* role = focused_ui_element_ptr->get_role() ? [NSString stringWithUTF8String:focused_ui_element_ptr->get_role()->c_str()] : @"(unknown)";
-      NSString* subrole = focused_ui_element_ptr->get_subrole() ? [NSString stringWithUTF8String:focused_ui_element_ptr->get_subrole()->c_str()] : @"";
-      roleText = subrole.length > 0
-                     ? [NSString stringWithFormat:@"Focused element: %@ / %@", role, subrole]
-                     : [NSString stringWithFormat:@"Focused element: %@", role];
-
+    monitor->frontmost_application_changed.connect([appDelegate](auto&& application_ptr) {
       NSMutableArray<NSString*>* lines = [NSMutableArray array];
-      if (auto& roleDescription = focused_ui_element_ptr->get_role_description()) {
-        [lines addObject:[NSString stringWithFormat:@"Role description: %s", roleDescription->c_str()]];
-      }
-      if (auto& title = focused_ui_element_ptr->get_title()) {
-        [lines addObject:[NSString stringWithFormat:@"Title: %s", title->c_str()]];
-      }
-      if (auto& description = focused_ui_element_ptr->get_description()) {
-        [lines addObject:[NSString stringWithFormat:@"Description: %s", description->c_str()]];
-      }
-      if (auto& identifier = focused_ui_element_ptr->get_identifier()) {
-        [lines addObject:[NSString stringWithFormat:@"Identifier: %s", identifier->c_str()]];
+
+      if (!application_ptr) {
+        [lines addObject:@"Application: none"];
+      } else {
+        NSString* name = makeUTF8String(application_ptr->get_name(), @"(unknown)");
+        [lines addObject:[NSString stringWithFormat:@"Application: %@", name]];
+
+        if (auto& bundleIdentifier = application_ptr->get_bundle_identifier()) {
+          [lines addObject:[NSString stringWithFormat:@"Bundle ID: %@", makeUTF8String(bundleIdentifier)]];
+        }
+        if (auto& pid = application_ptr->get_pid()) {
+          [lines addObject:[NSString stringWithFormat:@"PID: %d", *pid]];
+        }
       }
 
-      detailText = [lines componentsJoinedByString:@"\n"];
-    }
+      NSString* text = [lines componentsJoinedByString:@"\n"];
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-      appDelegate.roleLabel.stringValue = roleText;
-      appDelegate.detailLabel.stringValue = detailText;
+      dispatch_async(dispatch_get_main_queue(), ^{
+        appDelegate.applicationLabel.stringValue = text;
+      });
     });
-  });
 
-  self.monitor->trigger();
+    monitor->focused_ui_element_changed.connect([appDelegate](auto&& focused_ui_element_ptr) {
+      NSString* roleText = nil;
+      NSString* detailText = @"";
+
+      if (!focused_ui_element_ptr) {
+        roleText = @"Focused element: none";
+      } else {
+        NSString* role = makeUTF8String(focused_ui_element_ptr->get_role(), @"(unknown)");
+        NSString* subrole = makeUTF8String(focused_ui_element_ptr->get_subrole());
+        roleText = subrole.length > 0
+                       ? [NSString stringWithFormat:@"Focused element: %@ / %@", role, subrole]
+                       : [NSString stringWithFormat:@"Focused element: %@", role];
+
+        NSMutableArray<NSString*>* lines = [NSMutableArray array];
+        if (auto& roleDescription = focused_ui_element_ptr->get_role_description()) {
+          [lines addObject:[NSString stringWithFormat:@"Role description: %@", makeUTF8String(roleDescription)]];
+        }
+        if (auto& title = focused_ui_element_ptr->get_title()) {
+          [lines addObject:[NSString stringWithFormat:@"Title: %@", makeUTF8String(title)]];
+        }
+        if (auto& description = focused_ui_element_ptr->get_description()) {
+          [lines addObject:[NSString stringWithFormat:@"Description: %@", makeUTF8String(description)]];
+        }
+        if (auto& identifier = focused_ui_element_ptr->get_identifier()) {
+          [lines addObject:[NSString stringWithFormat:@"Identifier: %@", makeUTF8String(identifier)]];
+        }
+
+        detailText = [lines componentsJoinedByString:@"\n"];
+      }
+
+      dispatch_async(dispatch_get_main_queue(), ^{
+        appDelegate.roleLabel.stringValue = roleText;
+        appDelegate.detailLabel.stringValue = detailText;
+      });
+    });
+
+    monitor->trigger();
+  }
 }
 
 - (void)applicationWillTerminate:(NSNotification*)notification {
   (void)notification;
 
-  self.monitor = nullptr;
   pqrs::osx::accessibility::monitor::terminate_shared_monitor();
+  pqrs::dispatcher::extra::terminate_shared_dispatcher();
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
