@@ -18,5 +18,7 @@ jobs:
           fetch-depth: 1
       - name: example
         run: make -C example
+      - name: example-app
+        run: make -C example-app
       - name: tests
         run: make -C tests

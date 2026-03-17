@@ -12,6 +12,7 @@ cpp-osx-accessibility depends the following classes.
 - [Nod](https://github.com/fr00b0/nod)
 - [pqrs::cf::dictionary](https://github.com/pqrs-org/cpp-cf-dictionary).
 - [pqrs::dispatcher](https://github.com/pqrs-org/cpp-dispatcher).
+- [pqrs::gsl](https://github.com/pqrs-org/cpp-gsl).
 
 ## Install
 
