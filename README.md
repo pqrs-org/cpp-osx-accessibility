@@ -20,5 +20,5 @@ Copy `include/pqrs` and `vendor/vendor/include` directories into your include di
 
 And then configure your project as follows:
 
-- `src/pqrs/osx/accessibility/PQRSOSXAccessibilityMonitorImpl.swift`
+- `src/pqrs/osx/accessibility/*.swift`
 - `include/pqrs/osx/accessibility/impl/Bridging-Header.h` as Bridging Header
