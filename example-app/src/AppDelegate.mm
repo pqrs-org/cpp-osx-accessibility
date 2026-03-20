@@ -136,7 +136,14 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
   self.window.title = @"Accessibility Monitor Example";
   self.window.level = NSFloatingWindowLevel;
   self.window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces;
-  [self.window center];
+
+  NSScreen* screen = NSApp.mainWindow.screen ?: NSScreen.mainScreen ?: NSScreen.screens.firstObject;
+  if (screen) {
+    NSRect visibleFrame = screen.visibleFrame;
+    NSRect windowFrame = self.window.frame;
+    NSPoint topLeftPoint = NSMakePoint(NSMaxX(visibleFrame) - NSWidth(windowFrame), NSMaxY(visibleFrame));
+    [self.window setFrameTopLeftPoint:topLeftPoint];
+  }
 
   auto contentView = self.window.contentView;
 
