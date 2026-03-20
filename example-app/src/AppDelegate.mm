@@ -109,7 +109,7 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
       });
     });
 
-    monitor->trigger();
+    monitor->async_trigger();
   }
 }
 

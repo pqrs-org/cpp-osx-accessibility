@@ -92,27 +92,38 @@ private func copyPid(_ element: AXUIElement) -> pid_t? {
   return pid
 }
 
+@MainActor
 private func copySnapshot() -> Snapshot {
   let systemWideElement = AXUIElementCreateSystemWide()
   let applicationElement: AXUIElement? = copyAttribute(
     systemWideElement, kAXFocusedApplicationAttribute as CFString)
-  let focusedUIElement: AXUIElement? = copyAttribute(
+  let systemWideFocusedUIElement: AXUIElement? = copyAttribute(
     systemWideElement, kAXFocusedUIElementAttribute as CFString)
 
   let application =
     applicationElement
     .flatMap(copyPid(_:))
     .map(FrontmostApplication.init(processIdentifier:))
-    ?? focusedUIElement
+    ?? systemWideFocusedUIElement
     .flatMap(copyPid(_:))
     .map(FrontmostApplication.init(processIdentifier:))
 
   let workspaceApplication = FrontmostApplication(NSWorkspace.shared.frontmostApplication)
 
-  let focusedElement = focusedUIElement.map(FocusedUIElement.init)
+  let resolvedApplication = application ?? workspaceApplication
+
+  let applicationFocusedUIElement: AXUIElement? =
+    resolvedApplication.processIdentifier
+    .map(AXUIElementCreateApplication)
+    .flatMap {
+      copyAttribute($0, kAXFocusedUIElementAttribute as CFString) as AXUIElement?
+    }
+
+  let focusedElement = (applicationFocusedUIElement ?? systemWideFocusedUIElement).map(
+    FocusedUIElement.init)
 
   return Snapshot(
-    application: application ?? workspaceApplication,
+    application: resolvedApplication,
     focusedUIElement: focusedElement
   )
 }
@@ -136,8 +147,10 @@ private actor PQRSOSXAccessibilityMonitor {
   private var callback: PQRSOSXAccessibilityMonitorCallback?
   private var monitorTask: Task<Void, Never>?
   private var lastSnapshot = Snapshot(application: nil, focusedUIElement: nil)
+  private var stateGeneration: UInt64 = 0
 
   func setCallback(_ callback: @escaping PQRSOSXAccessibilityMonitorCallback) {
+    stateGeneration &+= 1
     self.callback = callback
 
     if monitorTask == nil {
@@ -148,25 +161,34 @@ private actor PQRSOSXAccessibilityMonitor {
   }
 
   func unsetCallback() {
+    stateGeneration &+= 1
     callback = nil
     monitorTask?.cancel()
     monitorTask = nil
     lastSnapshot = Snapshot(application: nil, focusedUIElement: nil)
   }
 
-  func trigger() async {
-    let snapshot = copySnapshot()
-    lastSnapshot = snapshot
-    await emit(snapshot, force: true)
+  func asyncTrigger() async {
+    // Capture the current generation before hopping to another task so stale snapshots
+    // can be discarded if setCallback/unsetCallback changes the monitor state meanwhile.
+    let generation = stateGeneration
+
+    Task {
+      let snapshot = await MainActor.run {
+        copySnapshot()
+      }
+      await commitSnapshotAndEmit(snapshot, force: true, generation: generation)
+    }
   }
 
   private func listenLoop() async {
     while !Task.isCancelled {
-      let snapshot = copySnapshot()
+      let snapshot = await MainActor.run {
+        copySnapshot()
+      }
 
       if snapshot != lastSnapshot {
-        lastSnapshot = snapshot
-        await emit(snapshot, force: false)
+        await commitSnapshotAndEmit(snapshot, force: false)
       }
 
       do {
@@ -177,7 +199,15 @@ private actor PQRSOSXAccessibilityMonitor {
     }
   }
 
-  private func emit(_ snapshot: Snapshot, force: Bool) async {
+  private func commitSnapshotAndEmit(_ snapshot: Snapshot, force: Bool, generation: UInt64? = nil)
+    async
+  {
+    if let generation, generation != stateGeneration {
+      return
+    }
+
+    lastSnapshot = snapshot
+
     guard let callback else {
       return
     }
@@ -245,9 +275,9 @@ func PQRSOSXAccessibilityMonitorUnsetCallback() {
   }
 }
 
-@_cdecl("pqrs_osx_accessibility_monitor_trigger")
-func PQRSOSXAccessibilityMonitorTrigger() {
+@_cdecl("pqrs_osx_accessibility_monitor_async_trigger")
+func PQRSOSXAccessibilityMonitorAsyncTrigger() {
   syncCall {
-    await PQRSOSXAccessibilityMonitor.shared.trigger()
+    await PQRSOSXAccessibilityMonitor.shared.asyncTrigger()
   }
 }

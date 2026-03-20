@@ -62,10 +62,10 @@ public:
     return shared_monitor_;
   }
 
-  // Retrieves a snapshot of the current state and invokes the signals.
+  // Schedules retrieval of a snapshot of the current state and asynchronously invokes the signals.
   // A typical use is to call this right after setting the signals.
-  void trigger() {
-    pqrs_osx_accessibility_monitor_trigger();
+  void async_trigger() {
+    pqrs_osx_accessibility_monitor_async_trigger();
   }
 
 private:
@@ -179,7 +179,7 @@ private:
                                                               identifier);
 
     enqueue_to_dispatcher([this, force, current_application, current_focused_ui_element] {
-      // `force` is non-zero when trigger() explicitly requests callbacks even if the snapshot is unchanged.
+      // `force` is non-zero when async_trigger() explicitly requests callbacks even if the snapshot is unchanged.
       if (force != 0 || *last_application_ != *current_application) {
         last_application_ = current_application;
         frontmost_application_changed(current_application);
