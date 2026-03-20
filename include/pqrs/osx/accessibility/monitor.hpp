@@ -180,12 +180,12 @@ private:
 
     enqueue_to_dispatcher([this, force, current_application, current_focused_ui_element] {
       // `force` is non-zero when trigger() explicitly requests callbacks even if the snapshot is unchanged.
-      if (force != 0 || last_application_ != current_application) {
+      if (force != 0 || *last_application_ != *current_application) {
         last_application_ = current_application;
         frontmost_application_changed(current_application);
       }
 
-      if (force != 0 || last_focused_ui_element_ != current_focused_ui_element) {
+      if (force != 0 || *last_focused_ui_element_ != *current_focused_ui_element) {
         last_focused_ui_element_ = current_focused_ui_element;
         focused_ui_element_changed(current_focused_ui_element);
       }
