@@ -11,6 +11,8 @@
 extern "C" {
 #endif
 
+// Do not use these functions directly.
+
 typedef void (*pqrs_osx_accessibility_monitor_callback)(int32_t force,
                                                         const char* application_name,
                                                         const char* bundle_identifier,
