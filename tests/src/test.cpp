@@ -22,12 +22,20 @@ int main(void) {
     pqrs::osx::accessibility::focused_ui_element a;
     a.set_role("AXTextArea")
         .set_subrole("AXSearchField")
-        .set_identifier("spotlight-search");
+        .set_identifier("spotlight-search")
+        .set_window_position_x(10.0)
+        .set_window_position_y(20.0)
+        .set_window_size_width(30.0)
+        .set_window_size_height(40.0);
 
     pqrs::osx::accessibility::focused_ui_element b;
     b.set_role("AXTextArea")
         .set_subrole("AXSearchField")
-        .set_identifier("spotlight-search");
+        .set_identifier("spotlight-search")
+        .set_window_position_x(10.0)
+        .set_window_position_y(20.0)
+        .set_window_size_width(30.0)
+        .set_window_size_height(40.0);
 
     expect(a == b);
 

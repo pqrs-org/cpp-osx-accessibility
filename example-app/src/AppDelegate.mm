@@ -25,6 +25,22 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
 
   return fallback;
 }
+
+NSString* makePointString(const std::optional<double>& x, const std::optional<double>& y) {
+  if (!x || !y) {
+    return nil;
+  }
+
+  return [NSString stringWithFormat:@"(%.1f, %.1f)", *x, *y];
+}
+
+NSString* makeSizeString(const std::optional<double>& width, const std::optional<double>& height) {
+  if (!width || !height) {
+    return nil;
+  }
+
+  return [NSString stringWithFormat:@"(%.1f x %.1f)", *width, *height];
+}
 } // namespace
 
 @interface AppDelegate ()
@@ -100,6 +116,14 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
       if (auto& identifier = focused_ui_element_ptr->get_identifier()) {
         [lines addObject:[NSString stringWithFormat:@"Identifier: %@", makeUTF8String(identifier)]];
       }
+      if (auto string = makePointString(focused_ui_element_ptr->get_window_position_x(),
+                                        focused_ui_element_ptr->get_window_position_y())) {
+        [lines addObject:[NSString stringWithFormat:@"Focused window position: %@", string]];
+      }
+      if (auto string = makeSizeString(focused_ui_element_ptr->get_window_size_width(),
+                                       focused_ui_element_ptr->get_window_size_height())) {
+        [lines addObject:[NSString stringWithFormat:@"Focused window size: %@", string]];
+      }
 
       detailText = [lines componentsJoinedByString:@"\n"];
 
@@ -126,7 +150,7 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
 }
 
 - (void)buildWindow {
-  self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 320)
+  self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 360)
                                             styleMask:(NSWindowStyleMaskTitled |
                                                        NSWindowStyleMaskClosable |
                                                        NSWindowStyleMaskMiniaturizable |
@@ -137,7 +161,8 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
   self.window.level = NSFloatingWindowLevel;
   self.window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces;
 
-  NSScreen* screen = NSApp.mainWindow.screen ?: NSScreen.mainScreen ?: NSScreen.screens.firstObject;
+  NSScreen* screen = NSApp.mainWindow.screen ?: NSScreen.mainScreen ?
+                                                                    : NSScreen.screens.firstObject;
   if (screen) {
     NSRect visibleFrame = screen.visibleFrame;
     NSRect windowFrame = self.window.frame;
@@ -147,21 +172,21 @@ NSString* makeUTF8String(const std::optional<std::string>& value, NSString* fall
 
   auto contentView = self.window.contentView;
 
-  auto headingLabel = makeLabel(NSMakeRect(20, 270, 640, 24), 20, NSColor.labelColor);
+  auto headingLabel = makeLabel(NSMakeRect(20, 310, 640, 24), 20, NSColor.labelColor);
   headingLabel.stringValue = @"Frontmost application and focused element";
   [contentView addSubview:headingLabel];
 
-  self.permissionLabel = makeLabel(NSMakeRect(20, 236, 640, 20), 12, NSColor.secondaryLabelColor);
+  self.permissionLabel = makeLabel(NSMakeRect(20, 276, 640, 20), 12, NSColor.secondaryLabelColor);
   [contentView addSubview:self.permissionLabel];
 
-  self.applicationLabel = makeLabel(NSMakeRect(20, 156, 640, 64), 13, NSColor.labelColor);
+  self.applicationLabel = makeLabel(NSMakeRect(20, 196, 640, 64), 13, NSColor.labelColor);
   self.applicationLabel.usesSingleLineMode = NO;
   [contentView addSubview:self.applicationLabel];
 
-  self.roleLabel = makeLabel(NSMakeRect(20, 120, 640, 20), 13, NSColor.labelColor);
+  self.roleLabel = makeLabel(NSMakeRect(20, 160, 640, 20), 13, NSColor.labelColor);
   [contentView addSubview:self.roleLabel];
 
-  self.detailLabel = makeLabel(NSMakeRect(20, 24, 640, 84), 13, NSColor.secondaryLabelColor);
+  self.detailLabel = makeLabel(NSMakeRect(20, 24, 640, 124), 13, NSColor.secondaryLabelColor);
   self.detailLabel.usesSingleLineMode = NO;
   [contentView addSubview:self.detailLabel];
 
