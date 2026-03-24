@@ -5,23 +5,22 @@
 import AppKit
 import ApplicationServices
 
-private let accessibilityObserverCallback: AXObserverCallback = { _, element, notification, _ in
+private let observedAccessibilityNotifications: [CFString] = [
+  kAXFocusedUIElementChangedNotification as CFString,
+  kAXFocusedWindowChangedNotification as CFString,
+  kAXMainWindowChangedNotification as CFString,
+]
+
+private let accessibilityObserverCallback: AXObserverCallback = { _, _, notification, _ in
   Task {
-    await PQRSOSXAccessibilityMonitor.shared.handleAccessibilityNotification(
-      notification,
-      processIdentifier: copyPid(element)
-    )
+    if observedAccessibilityNotifications.contains(notification) {
+      await PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
+    }
   }
 }
 
 @MainActor
 final class PQRSOSXAccessibilityObservationController {
-  private let observedNotifications: [CFString] = [
-    kAXFocusedUIElementChangedNotification as CFString,
-    kAXFocusedWindowChangedNotification as CFString,
-    kAXMainWindowChangedNotification as CFString,
-  ]
-
   private var activationObserver: NSObjectProtocol?
   private var terminationObserver: NSObjectProtocol?
   // PIDs that have been observed through NSWorkspace activation notifications.
@@ -37,23 +36,17 @@ final class PQRSOSXAccessibilityObservationController {
       return
     }
 
-    if let processIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-      processIdentifier != 0
-    {
-      registerProcessIdentifier(processIdentifier, detectionSource: .workspace)
-    }
-
     activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.didActivateApplicationNotification,
       object: nil,
       queue: nil
-    ) { [weak self] notification in
+    ) { [weak self] _ in
       guard let self else {
         return
       }
 
       Task { @MainActor in
-        self.handleDidActivateApplication(notification)
+        self.requestRefresh()
       }
     }
 
@@ -67,13 +60,16 @@ final class PQRSOSXAccessibilityObservationController {
       }
 
       Task { @MainActor in
-        self.handleDidTerminateApplication(notification)
+        let processIdentifier =
+          (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
+          .processIdentifier
+
+        self.pruneProcessIdentifier(processIdentifier)
+        self.requestRefresh()
       }
     }
 
-    syncObservers(
-      frontmostProcessIdentifier: NSWorkspace.shared.frontmostApplication?
-        .processIdentifier)
+    requestRefresh()
   }
 
   func stop() {
@@ -147,46 +143,10 @@ final class PQRSOSXAccessibilityObservationController {
     }
   }
 
-  func handleAccessibilityNotification(_ notification: CFString, processIdentifier: pid_t?) {
-    if observedNotifications.contains(notification) {
-      registerProcessIdentifier(processIdentifier, detectionSource: .axObserver)
-
-      requestRefresh()
-    }
-  }
-
   private func requestRefresh() {
     Task {
       await PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
     }
-  }
-
-  private func handleDidActivateApplication(_ notification: Notification) {
-    let processIdentifier =
-      (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
-      .processIdentifier
-      ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
-
-    guard let processIdentifier, processIdentifier != 0 else {
-      syncObservers(
-        frontmostProcessIdentifier: NSWorkspace.shared.frontmostApplication?
-          .processIdentifier)
-      requestRefresh()
-      return
-    }
-
-    registerProcessIdentifier(processIdentifier, detectionSource: .workspace)
-    syncObservers(frontmostProcessIdentifier: processIdentifier)
-    requestRefresh()
-  }
-
-  private func handleDidTerminateApplication(_ notification: Notification) {
-    let processIdentifier =
-      (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
-      .processIdentifier
-
-    pruneProcessIdentifier(processIdentifier)
-    requestRefresh()
   }
 
   func syncObservers(frontmostProcessIdentifier: pid_t?) {
@@ -226,7 +186,7 @@ final class PQRSOSXAccessibilityObservationController {
     let applicationElement = AXUIElementCreateApplication(processIdentifier)
     var registered = false
 
-    for notification in observedNotifications {
+    for notification in observedAccessibilityNotifications {
       let error = AXObserverAddNotification(observer, applicationElement, notification, nil)
       if error == .success {
         registered = true
