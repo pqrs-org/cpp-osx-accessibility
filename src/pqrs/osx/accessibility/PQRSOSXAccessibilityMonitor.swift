@@ -123,7 +123,7 @@ actor PQRSOSXAccessibilityMonitor {
       let observationController = observationController
       let snapshot = await MainActor.run {
         copySnapshot(cachedApplication: cachedApplication) { processIdentifier in
-          observationController?.registerObserverManagedProcessIdentifier(processIdentifier)
+          observationController?.noteObserverManagedProcessIdentifier(processIdentifier)
           observationController?.syncObservers(
             frontmostProcessIdentifier: processIdentifier
           )

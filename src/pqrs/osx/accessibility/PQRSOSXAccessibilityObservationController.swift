@@ -98,7 +98,7 @@ final class PQRSOSXAccessibilityObservationController {
     frontmostProcessIdentifier = nil
   }
 
-  func registerObserverManagedProcessIdentifier(_ processIdentifier: pid_t?) {
+  func noteObserverManagedProcessIdentifier(_ processIdentifier: pid_t?) {
     guard let processIdentifier, processIdentifier != 0 else {
       return
     }
@@ -108,7 +108,6 @@ final class PQRSOSXAccessibilityObservationController {
     }
 
     observerManagedPIDs.insert(processIdentifier)
-    syncObservers(frontmostProcessIdentifier: frontmostProcessIdentifier)
   }
 
   func pruneProcessIdentifier(_ processIdentifier: pid_t?) {
@@ -204,7 +203,7 @@ final class PQRSOSXAccessibilityObservationController {
   func syncObservers(frontmostProcessIdentifier: pid_t?) {
     self.frontmostProcessIdentifier = frontmostProcessIdentifier
 
-    var targetPIDs = observerManagedPIDs
+    var targetPIDs = observerManagedPIDs.subtracting(workspaceKnownPIDs)
 
     if let frontmostProcessIdentifier, frontmostProcessIdentifier != 0 {
       targetPIDs.insert(frontmostProcessIdentifier)
