@@ -68,7 +68,6 @@ final class PQRSOSXAccessibilityObservationController {
 
       Task { @MainActor in
         self.handleDidTerminateApplication(notification)
-        self.requestRefresh()
       }
     }
 
@@ -187,6 +186,7 @@ final class PQRSOSXAccessibilityObservationController {
       .processIdentifier
 
     pruneProcessIdentifier(processIdentifier)
+    requestRefresh()
   }
 
   func syncObservers(frontmostProcessIdentifier: pid_t?) {
