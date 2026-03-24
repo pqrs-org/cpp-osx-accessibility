@@ -122,13 +122,17 @@ actor PQRSOSXAccessibilityMonitor {
       let cachedApplication = lastSnapshot.application
       let observationController = observationController
       let snapshot = await MainActor.run {
-        copySnapshot(cachedApplication: cachedApplication) { processIdentifier in
-          observationController?.noteObserverManagedProcessIdentifier(processIdentifier)
-          observationController?.syncObservers(
-            frontmostProcessIdentifier: processIdentifier
-          )
-          return observationController?.detectionSource(for: processIdentifier) ?? .none
-        }
+        copySnapshot(
+          cachedApplication: cachedApplication,
+          handleAXProcessIdentifier: { axProcessIdentifier in
+            observationController?.registerObserverManagedProcessIdentifier(axProcessIdentifier)
+          }
+        )
+      }
+      await MainActor.run {
+        observationController?.syncObservers(
+          frontmostProcessIdentifier: snapshot.application?.processIdentifier
+        )
       }
 
       if force || snapshot != lastSnapshot {

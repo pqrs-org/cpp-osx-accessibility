@@ -98,7 +98,7 @@ final class PQRSOSXAccessibilityObservationController {
     frontmostProcessIdentifier = nil
   }
 
-  func noteObserverManagedProcessIdentifier(_ processIdentifier: pid_t?) {
+  func registerObserverManagedProcessIdentifier(_ processIdentifier: pid_t?) {
     guard let processIdentifier, processIdentifier != 0 else {
       return
     }
@@ -148,22 +148,6 @@ final class PQRSOSXAccessibilityObservationController {
 
       requestRefresh()
     }
-  }
-
-  func detectionSource(for processIdentifier: pid_t?) -> DetectionSource {
-    guard let processIdentifier, processIdentifier != 0 else {
-      return .none
-    }
-
-    if workspaceKnownPIDs.contains(processIdentifier) {
-      return .workspace
-    }
-
-    if observerManagedPIDs.contains(processIdentifier) || observersByPID[processIdentifier] != nil {
-      return .axObserver
-    }
-
-    return .none
   }
 
   private func requestRefresh() {

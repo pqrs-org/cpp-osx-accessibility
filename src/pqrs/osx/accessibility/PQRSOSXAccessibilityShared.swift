@@ -171,7 +171,7 @@ func copyCGSizeAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGSiz
 @MainActor
 func copySnapshot(
   cachedApplication: FrontmostApplication?,
-  resolveDetectionSource: (pid_t?) -> DetectionSource
+  handleAXProcessIdentifier: (pid_t?) -> Void
 ) -> Snapshot {
   let systemWideElement = AXUIElementCreateSystemWide()
   let workspaceFrontmostApplication = NSWorkspace.shared.frontmostApplication
@@ -196,7 +196,22 @@ func copySnapshot(
       nil
     }
 
-  let detectionSource = resolveDetectionSource(processIdentifier)
+  let detectionSource: DetectionSource
+  if let axProcessIdentifier, axProcessIdentifier != 0 {
+    if workspaceProcessIdentifier == nil
+      || workspaceProcessIdentifier == 0
+      || workspaceProcessIdentifier != axProcessIdentifier
+    {
+      handleAXProcessIdentifier(axProcessIdentifier)
+      detectionSource = .axObserver
+    } else {
+      detectionSource = .workspace
+    }
+  } else if let workspaceProcessIdentifier, workspaceProcessIdentifier != 0 {
+    detectionSource = .workspace
+  } else {
+    detectionSource = .none
+  }
 
   let resolvedApplication: FrontmostApplication? =
     if let processIdentifier {
