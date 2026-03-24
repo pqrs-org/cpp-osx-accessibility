@@ -120,18 +120,15 @@ actor PQRSOSXAccessibilityMonitor {
       forcePending = false
 
       let cachedApplication = lastSnapshot.application
-      let snapshot = await MainActor.run {
-        copySnapshot(cachedApplication: cachedApplication)
-      }
-
       let observationController = observationController
-      await MainActor.run {
-        observationController?.registerObserverManagedProcessIdentifier(
-          snapshot.application?.processIdentifier
-        )
-        observationController?.syncObservers(
-          workspaceFrontmostProcessIdentifier: snapshot.application?.processIdentifier
-        )
+      let snapshot = await MainActor.run {
+        copySnapshot(cachedApplication: cachedApplication) { processIdentifier in
+          observationController?.registerObserverManagedProcessIdentifier(processIdentifier)
+          observationController?.syncObservers(
+            frontmostProcessIdentifier: processIdentifier
+          )
+          return observationController?.detectionSource(for: processIdentifier) ?? .none
+        }
       }
 
       if force || snapshot != lastSnapshot {
@@ -165,6 +162,8 @@ actor PQRSOSXAccessibilityMonitor {
                           bundle_path: bundlePath,
                           file_path: filePath,
                           pid: snapshot.application?.processIdentifier ?? 0,
+                          application_detection_source: snapshot.application?.detectionSource
+                            .rawValue ?? 0,
                           role: role,
                           subrole: subrole,
                           role_description: roleDescription,

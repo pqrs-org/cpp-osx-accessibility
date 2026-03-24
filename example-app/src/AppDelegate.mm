@@ -41,6 +41,18 @@ NSString* makeSizeString(const std::optional<double>& width, const std::optional
 
   return [NSString stringWithFormat:@"(%.1f x %.1f)", *width, *height];
 }
+
+NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detection_source value) {
+  switch (value) {
+    case pqrs::osx::accessibility::application::detection_source::workspace:
+      return @"workspace";
+    case pqrs::osx::accessibility::application::detection_source::ax_observer:
+      return @"ax_observer";
+    case pqrs::osx::accessibility::application::detection_source::none:
+    default:
+      return @"none";
+  }
+}
 } // namespace
 
 @interface AppDelegate ()
@@ -85,6 +97,9 @@ NSString* makeSizeString(const std::optional<double>& width, const std::optional
       if (auto& pid = application_ptr->get_pid()) {
         [lines addObject:[NSString stringWithFormat:@"PID: %d", *pid]];
       }
+      [lines addObject:[NSString stringWithFormat:@"Detection source: %@",
+                                                  makeDetectionSourceString(
+                                                      application_ptr->get_detection_source())]];
 
       NSString* text = [lines componentsJoinedByString:@"\n"];
 

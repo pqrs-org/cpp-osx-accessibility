@@ -8,14 +8,20 @@ int main(void) {
     pqrs::osx::accessibility::application a;
     a.set_name("Spotlight")
         .set_bundle_identifier("com.apple.Spotlight")
+        .set_detection_source(pqrs::osx::accessibility::application::detection_source::workspace)
         .set_pid(123);
 
     pqrs::osx::accessibility::application b;
     b.set_name("Spotlight")
         .set_bundle_identifier("com.apple.Spotlight")
+        .set_detection_source(pqrs::osx::accessibility::application::detection_source::workspace)
         .set_pid(123);
 
     expect(a == b);
+
+    b.set_detection_source(pqrs::osx::accessibility::application::detection_source::ax_observer);
+
+    expect(a != b);
   };
 
   "focused_ui_element equality"_test = [] {
