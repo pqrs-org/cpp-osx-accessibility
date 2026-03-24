@@ -125,7 +125,10 @@ actor PQRSOSXAccessibilityMonitor {
         copySnapshot(
           cachedApplication: cachedApplication,
           handleAXProcessIdentifier: { axProcessIdentifier in
-            observationController?.registerObserverManagedProcessIdentifier(axProcessIdentifier)
+            observationController?.registerProcessIdentifier(
+              axProcessIdentifier,
+              detectionSource: .axObserver
+            )
           }
         )
       }

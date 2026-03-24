@@ -40,7 +40,7 @@ final class PQRSOSXAccessibilityObservationController {
     if let processIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier,
       processIdentifier != 0
     {
-      workspaceKnownPIDs.insert(processIdentifier)
+      registerProcessIdentifier(processIdentifier, detectionSource: .workspace)
     }
 
     activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -98,16 +98,26 @@ final class PQRSOSXAccessibilityObservationController {
     frontmostProcessIdentifier = nil
   }
 
-  func registerObserverManagedProcessIdentifier(_ processIdentifier: pid_t?) {
+  func registerProcessIdentifier(_ processIdentifier: pid_t?, detectionSource: DetectionSource) {
     guard let processIdentifier, processIdentifier != 0 else {
       return
     }
 
-    guard !workspaceKnownPIDs.contains(processIdentifier) else {
-      return
-    }
+    switch detectionSource {
+    case .workspace:
+      workspaceKnownPIDs.insert(processIdentifier)
+      observerManagedPIDs.remove(processIdentifier)
 
-    observerManagedPIDs.insert(processIdentifier)
+    case .axObserver:
+      guard !workspaceKnownPIDs.contains(processIdentifier) else {
+        return
+      }
+
+      observerManagedPIDs.insert(processIdentifier)
+
+    case .none:
+      break
+    }
   }
 
   func pruneProcessIdentifier(_ processIdentifier: pid_t?) {
@@ -140,11 +150,7 @@ final class PQRSOSXAccessibilityObservationController {
 
   func handleAccessibilityNotification(_ notification: CFString, processIdentifier: pid_t?) {
     if observedNotifications.contains(notification) {
-      if let processIdentifier, processIdentifier != 0,
-        !workspaceKnownPIDs.contains(processIdentifier)
-      {
-        observerManagedPIDs.insert(processIdentifier)
-      }
+      registerProcessIdentifier(processIdentifier, detectionSource: .axObserver)
 
       requestRefresh()
     }
@@ -170,8 +176,7 @@ final class PQRSOSXAccessibilityObservationController {
       return
     }
 
-    workspaceKnownPIDs.insert(processIdentifier)
-    observerManagedPIDs.remove(processIdentifier)
+    registerProcessIdentifier(processIdentifier, detectionSource: .workspace)
     syncObservers(frontmostProcessIdentifier: processIdentifier)
     requestRefresh()
   }
