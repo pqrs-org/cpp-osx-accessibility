@@ -74,7 +74,7 @@ actor PQRSOSXAccessibilityMonitor {
         break
       }
 
-      await requestRefresh(force: false)
+      await pollRefreshIfNeeded()
     }
   }
 
@@ -134,6 +134,20 @@ actor PQRSOSXAccessibilityMonitor {
     }
 
     refreshInFlight = false
+  }
+
+  private func pollRefreshIfNeeded() async {
+    let workspaceFrontmostProcessIdentifier = await MainActor.run {
+      NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }
+    let applicationChanged =
+      workspaceFrontmostProcessIdentifier != lastSnapshot.application?.processIdentifier
+    let needsGeometryPolling =
+      lastSnapshot.focusedUIElement?.windowGeometrySource == .coreGraphics
+
+    if applicationChanged || needsGeometryPolling {
+      await requestRefresh(force: false)
+    }
   }
 
   private func commitSnapshotAndEmit(_ snapshot: Snapshot, force: Bool) async {

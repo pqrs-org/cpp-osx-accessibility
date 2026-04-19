@@ -9,6 +9,8 @@ private let observedAccessibilityNotifications: [CFString] = [
   kAXFocusedUIElementChangedNotification as CFString,
   kAXFocusedWindowChangedNotification as CFString,
   kAXMainWindowChangedNotification as CFString,
+  kAXWindowMovedNotification as CFString,
+  kAXWindowResizedNotification as CFString,
 ]
 
 private let accessibilityObserverCallback: AXObserverCallback = { _, _, notification, _ in

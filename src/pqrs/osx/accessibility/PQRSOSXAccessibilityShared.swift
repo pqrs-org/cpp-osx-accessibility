@@ -36,6 +36,12 @@ struct WindowGeometry: Sendable, Equatable {
   }
 }
 
+enum WindowGeometrySource: Sendable, Equatable {
+  case none
+  case ax
+  case coreGraphics
+}
+
 struct FrontmostWindowGeometryCacheEntry {
   let geometry: WindowGeometry?
   let timestamp: TimeInterval
@@ -101,6 +107,7 @@ struct FocusedUIElement: Sendable, Equatable {
   let identifier: String?
   let windowPosition: WindowPosition?
   let windowSize: WindowSize?
+  let windowGeometrySource: WindowGeometrySource
 
   init(windowGeometry: WindowGeometry?) {
     role = nil
@@ -111,6 +118,7 @@ struct FocusedUIElement: Sendable, Equatable {
     identifier = nil
     windowPosition = windowGeometry?.position
     windowSize = windowGeometry?.size
+    windowGeometrySource = windowGeometry?.isEmpty == false ? .coreGraphics : .none
   }
 
   @MainActor
@@ -139,20 +147,101 @@ struct FocusedUIElement: Sendable, Equatable {
         nil
       }
 
-    let windowGeometry =
+    let axWindowGeometry =
       windowElement
       .map(copyWindowGeometry(_:))
       .flatMap { $0.isEmpty ? nil : $0 }
+
+    let windowGeometry =
+      axWindowGeometry
       ?? fallbackWindowGeometry
 
     windowPosition = windowGeometry?.position
     windowSize = windowGeometry?.size
+    if axWindowGeometry != nil {
+      windowGeometrySource = .ax
+    } else if fallbackWindowGeometry != nil {
+      windowGeometrySource = .coreGraphics
+    } else {
+      windowGeometrySource = .none
+    }
   }
 }
 
 struct Snapshot: Sendable, Equatable {
   let application: FrontmostApplication?
   let focusedUIElement: FocusedUIElement?
+}
+
+@MainActor
+func copyFrontmostApplication(
+  cachedApplication: FrontmostApplication?,
+  handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
+) -> FrontmostApplication? {
+  let systemWideElement = AXUIElementCreateSystemWide()
+  let workspaceFrontmostApplication = NSWorkspace.shared.frontmostApplication
+  let (_, applicationElement) = copyAXUIElementAttributeValue(
+    systemWideElement,
+    kAXFocusedApplicationAttribute as CFString
+  )
+  let (_, systemWideFocusedUIElement) = copyAXUIElementAttributeValue(
+    systemWideElement,
+    kAXFocusedUIElementAttribute as CFString
+  )
+
+  let axProcessIdentifier =
+    applicationElement
+    .flatMap(copyPid(_:))
+    ?? systemWideFocusedUIElement
+    .flatMap(copyPid(_:))
+
+  let workspaceProcessIdentifier = workspaceFrontmostApplication?.processIdentifier
+  let processIdentifier: pid_t? =
+    if let axProcessIdentifier, axProcessIdentifier != 0 {
+      axProcessIdentifier
+    } else if let workspaceProcessIdentifier, workspaceProcessIdentifier != 0 {
+      workspaceProcessIdentifier
+    } else {
+      nil
+    }
+
+  let detectionSource: DetectionSource
+  if let axProcessIdentifier, axProcessIdentifier != 0 {
+    if workspaceProcessIdentifier == nil
+      || workspaceProcessIdentifier == 0
+      || workspaceProcessIdentifier != axProcessIdentifier
+    {
+      handleProcessIdentifier(workspaceProcessIdentifier, .workspace)
+      handleProcessIdentifier(axProcessIdentifier, .axObserver)
+      detectionSource = .axObserver
+    } else {
+      handleProcessIdentifier(axProcessIdentifier, .workspace)
+      detectionSource = .workspace
+    }
+  } else if let workspaceProcessIdentifier, workspaceProcessIdentifier != 0 {
+    handleProcessIdentifier(workspaceProcessIdentifier, .workspace)
+    detectionSource = .workspace
+  } else {
+    detectionSource = .none
+  }
+
+  return if let processIdentifier {
+    if cachedApplication?.processIdentifier == processIdentifier,
+      cachedApplication?.detectionSource == detectionSource
+    {
+      cachedApplication
+    } else {
+      FrontmostApplication(
+        processIdentifier: processIdentifier,
+        detectionSource: detectionSource
+      )
+    }
+  } else {
+    FrontmostApplication(
+      workspaceFrontmostApplication,
+      detectionSource: detectionSource
+    )
+  }
 }
 
 func copyAttribute<T>(_ element: AXUIElement, _ attribute: CFString) -> T? {
@@ -322,7 +411,6 @@ func copySnapshot(
   handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
 ) -> Snapshot {
   let systemWideElement = AXUIElementCreateSystemWide()
-  let workspaceFrontmostApplication = NSWorkspace.shared.frontmostApplication
   let (_, applicationElement) = copyAXUIElementAttributeValue(
     systemWideElement,
     kAXFocusedApplicationAttribute as CFString
@@ -332,60 +420,10 @@ func copySnapshot(
     kAXFocusedUIElementAttribute as CFString
   )
 
-  let axProcessIdentifier =
-    applicationElement
-    .flatMap(copyPid(_:))
-    ?? systemWideFocusedUIElement
-    .flatMap(copyPid(_:))
-
-  let workspaceProcessIdentifier = workspaceFrontmostApplication?.processIdentifier
-  let processIdentifier: pid_t? =
-    if let axProcessIdentifier, axProcessIdentifier != 0 {
-      axProcessIdentifier
-    } else if let workspaceProcessIdentifier, workspaceProcessIdentifier != 0 {
-      workspaceProcessIdentifier
-    } else {
-      nil
-    }
-
-  let detectionSource: DetectionSource
-  if let axProcessIdentifier, axProcessIdentifier != 0 {
-    if workspaceProcessIdentifier == nil
-      || workspaceProcessIdentifier == 0
-      || workspaceProcessIdentifier != axProcessIdentifier
-    {
-      handleProcessIdentifier(workspaceProcessIdentifier, .workspace)
-      handleProcessIdentifier(axProcessIdentifier, .axObserver)
-      detectionSource = .axObserver
-    } else {
-      handleProcessIdentifier(axProcessIdentifier, .workspace)
-      detectionSource = .workspace
-    }
-  } else if let workspaceProcessIdentifier, workspaceProcessIdentifier != 0 {
-    handleProcessIdentifier(workspaceProcessIdentifier, .workspace)
-    detectionSource = .workspace
-  } else {
-    detectionSource = .none
-  }
-
-  let resolvedApplication: FrontmostApplication? =
-    if let processIdentifier {
-      if cachedApplication?.processIdentifier == processIdentifier,
-        cachedApplication?.detectionSource == detectionSource
-      {
-        cachedApplication
-      } else {
-        FrontmostApplication(
-          processIdentifier: processIdentifier,
-          detectionSource: detectionSource
-        )
-      }
-    } else {
-      FrontmostApplication(
-        workspaceFrontmostApplication,
-        detectionSource: detectionSource
-      )
-    }
+  let resolvedApplication = copyFrontmostApplication(
+    cachedApplication: cachedApplication,
+    handleProcessIdentifier: handleProcessIdentifier
+  )
 
   let applicationFocusedUIElement: AXUIElement? =
     resolvedApplication?.processIdentifier
