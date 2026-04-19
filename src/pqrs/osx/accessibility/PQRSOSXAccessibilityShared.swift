@@ -27,6 +27,23 @@ struct WindowSize: Sendable, Equatable {
   let height: Double
 }
 
+struct WindowGeometry: Sendable, Equatable {
+  let position: WindowPosition?
+  let size: WindowSize?
+
+  var isEmpty: Bool {
+    position == nil && size == nil
+  }
+}
+
+struct FrontmostWindowGeometryCacheEntry {
+  let geometry: WindowGeometry?
+  let timestamp: TimeInterval
+}
+
+@MainActor
+var frontmostWindowGeometryCache: [pid_t: FrontmostWindowGeometryCacheEntry] = [:]
+
 struct FrontmostApplication: Sendable, Equatable {
   let name: String?
   let bundleIdentifier: String?
@@ -85,29 +102,51 @@ struct FocusedUIElement: Sendable, Equatable {
   let windowPosition: WindowPosition?
   let windowSize: WindowSize?
 
-  init(_ element: AXUIElement, applicationElement: AXUIElement?) {
+  init(windowGeometry: WindowGeometry?) {
+    role = nil
+    subrole = nil
+    roleDescription = nil
+    title = nil
+    description = nil
+    identifier = nil
+    windowPosition = windowGeometry?.position
+    windowSize = windowGeometry?.size
+  }
+
+  @MainActor
+  init(
+    _ element: AXUIElement,
+    applicationElement: AXUIElement?,
+    processIdentifier: pid_t?
+  ) {
     role = copyAttribute(element, kAXRoleAttribute as CFString)
     subrole = copyAttribute(element, kAXSubroleAttribute as CFString)
     roleDescription = copyAttribute(element, kAXRoleDescriptionAttribute as CFString)
     title = copyAttribute(element, kAXTitleAttribute as CFString)
     description = copyAttribute(element, kAXDescriptionAttribute as CFString)
     identifier = copyAttribute(element, kAXIdentifierAttribute as CFString)
+
     let windowElement =
       (copyAttribute(element, kAXWindowAttribute as CFString) as AXUIElement?)
       ?? applicationElement.flatMap {
         copyAttribute($0, kAXFocusedWindowAttribute as CFString) as AXUIElement?
       }
 
-    windowPosition = windowElement.flatMap {
-      copyCGPointAttribute($0, kAXPositionAttribute as CFString)
-    }.map {
-      WindowPosition(x: Double($0.x), y: Double($0.y))
-    }
-    windowSize = windowElement.flatMap {
-      copyCGSizeAttribute($0, kAXSizeAttribute as CFString)
-    }.map {
-      WindowSize(width: Double($0.width), height: Double($0.height))
-    }
+    let fallbackWindowGeometry: WindowGeometry? =
+      if let processIdentifier {
+        copyFrontmostWindowGeometry(processIdentifier)
+      } else {
+        nil
+      }
+
+    let windowGeometry =
+      windowElement
+      .map(copyWindowGeometry(_:))
+      .flatMap { $0.isEmpty ? nil : $0 }
+      ?? fallbackWindowGeometry
+
+    windowPosition = windowGeometry?.position
+    windowSize = windowGeometry?.size
   }
 }
 
@@ -117,12 +156,36 @@ struct Snapshot: Sendable, Equatable {
 }
 
 func copyAttribute<T>(_ element: AXUIElement, _ attribute: CFString) -> T? {
-  var value: CFTypeRef?
-  let error = AXUIElementCopyAttributeValue(element, attribute, &value)
+  let (error, value) = copyAttributeValue(element, attribute)
   guard error == .success else {
     return nil
   }
+
+  guard let value else {
+    return nil
+  }
+
+  if let typedValue = value as? T {
+    return typedValue
+  }
   return value as? T
+}
+
+func copyAXUIElementAttributeValue(_ element: AXUIElement, _ attribute: CFString) -> (
+  AXError, AXUIElement?
+) {
+  let (error, value) = copyAttributeValue(element, attribute)
+  guard error == .success, let value else {
+    return (error, nil)
+  }
+
+  return (error, unsafeBitCast(value, to: AXUIElement.self))
+}
+
+func copyAttributeValue(_ element: AXUIElement, _ attribute: CFString) -> (AXError, CFTypeRef?) {
+  var value: CFTypeRef?
+  let error = AXUIElementCopyAttributeValue(element, attribute, &value)
+  return (error, value)
 }
 
 func copyPid(_ element: AXUIElement) -> pid_t? {
@@ -168,6 +231,91 @@ func copyCGSizeAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGSiz
   return size
 }
 
+func copyWindowGeometry(_ element: AXUIElement) -> WindowGeometry {
+  let position =
+    copyCGPointAttribute(element, kAXPositionAttribute as CFString)
+    .map {
+      WindowPosition(x: Double($0.x), y: Double($0.y))
+    }
+  let size =
+    copyCGSizeAttribute(element, kAXSizeAttribute as CFString)
+    .map {
+      WindowSize(width: Double($0.width), height: Double($0.height))
+    }
+
+  return WindowGeometry(position: position, size: size)
+}
+
+@MainActor
+func copyFrontmostWindowGeometry(_ processIdentifier: pid_t) -> WindowGeometry? {
+  let now = ProcessInfo.processInfo.systemUptime
+
+  frontmostWindowGeometryCache = frontmostWindowGeometryCache.filter {
+    now - $0.value.timestamp <= frontmostWindowGeometryCacheLifetime
+  }
+
+  if let entry = frontmostWindowGeometryCache[processIdentifier],
+    now - entry.timestamp <= frontmostWindowGeometryCacheLifetime
+  {
+    return entry.geometry
+  }
+
+  guard
+    let windowInfoList = CGWindowListCopyWindowInfo(
+      [.optionOnScreenOnly, .excludeDesktopElements],
+      kCGNullWindowID
+    ) as? [[String: Any]]
+  else {
+    frontmostWindowGeometryCache[processIdentifier] = FrontmostWindowGeometryCacheEntry(
+      geometry: nil,
+      timestamp: now
+    )
+    return nil
+  }
+
+  for windowInfo in windowInfoList {
+    guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+      ownerPID == processIdentifier,
+      let boundsDictionary = windowInfo[kCGWindowBounds as String] as? NSDictionary
+    else {
+      continue
+    }
+
+    let layer = windowInfo[kCGWindowLayer as String] as? Int ?? 0
+    guard layer == 0 else {
+      continue
+    }
+
+    var bounds = CGRect.zero
+    guard CGRectMakeWithDictionaryRepresentation(boundsDictionary, &bounds) else {
+      continue
+    }
+
+    guard bounds.width > 0, bounds.height > 0 else {
+      continue
+    }
+
+    let result = WindowGeometry(
+      position: WindowPosition(x: Double(bounds.origin.x), y: Double(bounds.origin.y)),
+      size: WindowSize(width: Double(bounds.width), height: Double(bounds.height))
+    )
+
+    frontmostWindowGeometryCache[processIdentifier] = FrontmostWindowGeometryCacheEntry(
+      geometry: result,
+      timestamp: now
+    )
+
+    return result
+  }
+
+  frontmostWindowGeometryCache[processIdentifier] = FrontmostWindowGeometryCacheEntry(
+    geometry: nil,
+    timestamp: now
+  )
+
+  return nil
+}
+
 @MainActor
 func copySnapshot(
   cachedApplication: FrontmostApplication?,
@@ -175,10 +323,14 @@ func copySnapshot(
 ) -> Snapshot {
   let systemWideElement = AXUIElementCreateSystemWide()
   let workspaceFrontmostApplication = NSWorkspace.shared.frontmostApplication
-  let applicationElement: AXUIElement? = copyAttribute(
-    systemWideElement, kAXFocusedApplicationAttribute as CFString)
-  let systemWideFocusedUIElement: AXUIElement? = copyAttribute(
-    systemWideElement, kAXFocusedUIElementAttribute as CFString)
+  let (_, applicationElement) = copyAXUIElementAttributeValue(
+    systemWideElement,
+    kAXFocusedApplicationAttribute as CFString
+  )
+  let (_, systemWideFocusedUIElement) = copyAXUIElementAttributeValue(
+    systemWideElement,
+    kAXFocusedUIElementAttribute as CFString
+  )
 
   let axProcessIdentifier =
     applicationElement
@@ -238,12 +390,31 @@ func copySnapshot(
   let applicationFocusedUIElement: AXUIElement? =
     resolvedApplication?.processIdentifier
     .map(AXUIElementCreateApplication)
-    .flatMap {
-      copyAttribute($0, kAXFocusedUIElementAttribute as CFString) as AXUIElement?
+    .flatMap { applicationElement in
+      let (_, focusedUIElement) = copyAXUIElementAttributeValue(
+        applicationElement,
+        kAXFocusedUIElementAttribute as CFString
+      )
+      return focusedUIElement
     }
 
-  let focusedElement = (applicationFocusedUIElement ?? systemWideFocusedUIElement).map {
-    FocusedUIElement($0, applicationElement: applicationElement)
+  let focusedElement: FocusedUIElement?
+  if let element = applicationFocusedUIElement ?? systemWideFocusedUIElement {
+    focusedElement = FocusedUIElement(
+      element,
+      applicationElement: applicationElement,
+      processIdentifier: resolvedApplication?.processIdentifier
+    )
+  } else if let processIdentifier = resolvedApplication?.processIdentifier {
+    let fallbackWindowGeometry = copyFrontmostWindowGeometry(processIdentifier)
+
+    if fallbackWindowGeometry?.isEmpty == false {
+      focusedElement = FocusedUIElement(windowGeometry: fallbackWindowGeometry)
+    } else {
+      focusedElement = nil
+    }
+  } else {
+    focusedElement = nil
   }
 
   return Snapshot(
@@ -269,3 +440,4 @@ func withOptionalCString<Result>(
 // app-activation or focused-element notifications, so keep a modest fallback poll.
 let fallbackPollingInterval = Duration.milliseconds(500)
 let staleProcessCleanupInterval = Duration.seconds(10)
+let frontmostWindowGeometryCacheLifetime: TimeInterval = 0.5
