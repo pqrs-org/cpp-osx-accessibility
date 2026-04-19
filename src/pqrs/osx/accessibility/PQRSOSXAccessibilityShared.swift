@@ -81,21 +81,6 @@ struct FrontmostApplication: Sendable, Equatable {
     return value
   }
 
-  private init(
-    name: String?,
-    bundleIdentifier: String?,
-    bundlePath: String?,
-    filePath: String?,
-    processIdentifier: pid_t?,
-    detectionSource: DetectionSource
-  ) {
-    self.name = name
-    self.bundleIdentifier = bundleIdentifier
-    self.bundlePath = bundlePath
-    self.filePath = filePath
-    self.processIdentifier = processIdentifier
-    self.detectionSource = detectionSource
-  }
 }
 
 struct FocusedUIElement: Sendable, Equatable {

@@ -13,11 +13,9 @@ private let observedAccessibilityNotifications: [CFString] = [
   kAXWindowResizedNotification as CFString,
 ]
 
-private let accessibilityObserverCallback: AXObserverCallback = { _, _, notification, _ in
+private let accessibilityObserverCallback: AXObserverCallback = { _, _, _, _ in
   Task {
-    if observedAccessibilityNotifications.contains(notification) {
-      await PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
-    }
+    await PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
   }
 }
 
@@ -139,8 +137,7 @@ final class PQRSOSXAccessibilityObservationController {
       .union(observersByPID.keys)
 
     for processIdentifier in knownProcessIdentifiers
-      where NSRunningApplication(processIdentifier: processIdentifier) == nil
-    {
+    where NSRunningApplication(processIdentifier: processIdentifier) == nil {
       pruneProcessIdentifier(processIdentifier)
     }
   }
