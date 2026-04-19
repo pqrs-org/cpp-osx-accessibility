@@ -74,7 +74,7 @@ actor PQRSOSXAccessibilityMonitor {
         break
       }
 
-      await pollRefreshIfNeeded()
+      await refreshIfPollingNeedsSnapshot()
     }
   }
 
@@ -136,12 +136,12 @@ actor PQRSOSXAccessibilityMonitor {
     refreshInFlight = false
   }
 
-  private func pollRefreshIfNeeded() async {
-    let workspaceFrontmostProcessIdentifier = await MainActor.run {
-      NSWorkspace.shared.frontmostApplication?.processIdentifier
+  private func refreshIfPollingNeedsSnapshot() async {
+    let frontmostProcessIdentifier = await MainActor.run {
+      copyFrontmostProcessIdentifier()
     }
     let applicationChanged =
-      workspaceFrontmostProcessIdentifier != lastSnapshot.application?.processIdentifier
+      frontmostProcessIdentifier != lastSnapshot.application?.processIdentifier
     let needsGeometryPolling =
       lastSnapshot.focusedUIElement?.windowGeometrySource == .coreGraphics
 

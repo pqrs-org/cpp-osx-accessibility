@@ -174,12 +174,8 @@ struct Snapshot: Sendable, Equatable {
 }
 
 @MainActor
-func copyFrontmostApplication(
-  cachedApplication: FrontmostApplication?,
-  handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
-) -> FrontmostApplication? {
+func copyFrontmostProcessIdentifier() -> pid_t? {
   let systemWideElement = AXUIElementCreateSystemWide()
-  let workspaceFrontmostApplication = NSWorkspace.shared.frontmostApplication
   let (_, applicationElement) = copyAXUIElementAttributeValue(
     systemWideElement,
     kAXFocusedApplicationAttribute as CFString
@@ -189,6 +185,21 @@ func copyFrontmostApplication(
     kAXFocusedUIElementAttribute as CFString
   )
 
+  return applicationElement
+    .flatMap(copyPid(_:))
+    ?? systemWideFocusedUIElement
+    .flatMap(copyPid(_:))
+    ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+}
+
+@MainActor
+func resolveFrontmostApplication(
+  cachedApplication: FrontmostApplication?,
+  workspaceFrontmostApplication: NSRunningApplication?,
+  applicationElement: AXUIElement?,
+  systemWideFocusedUIElement: AXUIElement?,
+  handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
+) -> FrontmostApplication? {
   let axProcessIdentifier =
     applicationElement
     .flatMap(copyPid(_:))
@@ -246,17 +257,10 @@ func copyFrontmostApplication(
 
 func copyAttribute<T>(_ element: AXUIElement, _ attribute: CFString) -> T? {
   let (error, value) = copyAttributeValue(element, attribute)
-  guard error == .success else {
+  guard error == .success, let value else {
     return nil
   }
 
-  guard let value else {
-    return nil
-  }
-
-  if let typedValue = value as? T {
-    return typedValue
-  }
   return value as? T
 }
 
@@ -265,6 +269,10 @@ func copyAXUIElementAttributeValue(_ element: AXUIElement, _ attribute: CFString
 ) {
   let (error, value) = copyAttributeValue(element, attribute)
   guard error == .success, let value else {
+    return (error, nil)
+  }
+
+  guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
     return (error, nil)
   }
 
@@ -411,6 +419,7 @@ func copySnapshot(
   handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
 ) -> Snapshot {
   let systemWideElement = AXUIElementCreateSystemWide()
+  let workspaceFrontmostApplication = NSWorkspace.shared.frontmostApplication
   let (_, applicationElement) = copyAXUIElementAttributeValue(
     systemWideElement,
     kAXFocusedApplicationAttribute as CFString
@@ -420,8 +429,11 @@ func copySnapshot(
     kAXFocusedUIElementAttribute as CFString
   )
 
-  let resolvedApplication = copyFrontmostApplication(
+  let resolvedApplication = resolveFrontmostApplication(
     cachedApplication: cachedApplication,
+    workspaceFrontmostApplication: workspaceFrontmostApplication,
+    applicationElement: applicationElement,
+    systemWideFocusedUIElement: systemWideFocusedUIElement,
     handleProcessIdentifier: handleProcessIdentifier
   )
 
