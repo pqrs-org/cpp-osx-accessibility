@@ -136,10 +136,10 @@ final class PQRSOSXAccessibilityObservationController {
       .union(observerManagedPIDs)
       .union(observersByPID.keys)
 
-    for processIdentifier in knownProcessIdentifiers {
-      if NSRunningApplication(processIdentifier: processIdentifier) == nil {
-        pruneProcessIdentifier(processIdentifier)
-      }
+    for processIdentifier in knownProcessIdentifiers
+      where NSRunningApplication(processIdentifier: processIdentifier) == nil
+    {
+      pruneProcessIdentifier(processIdentifier)
     }
   }
 
