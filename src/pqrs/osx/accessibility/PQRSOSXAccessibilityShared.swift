@@ -140,17 +140,17 @@ struct FocusedUIElement: Sendable, Equatable {
         copyAttribute($0, kAXFocusedWindowAttribute as CFString) as AXUIElement?
       }
 
-    let fallbackWindowGeometry: WindowGeometry? =
-      if let processIdentifier {
-        copyFrontmostWindowGeometry(processIdentifier)
-      } else {
-        nil
-      }
-
     let axWindowGeometry =
       windowElement
       .map(copyWindowGeometry(_:))
       .flatMap { $0.isEmpty ? nil : $0 }
+
+    let fallbackWindowGeometry: WindowGeometry? =
+      if axWindowGeometry == nil, let processIdentifier {
+        copyFrontmostWindowGeometry(processIdentifier)
+      } else {
+        nil
+      }
 
     let windowGeometry =
       axWindowGeometry
