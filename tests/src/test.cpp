@@ -1,7 +1,7 @@
 #include <boost/ut.hpp>
 #include <pqrs/osx/accessibility.hpp>
 
-int main(void) {
+int main() {
   using namespace boost::ut;
 
   "application equality"_test = [] {
