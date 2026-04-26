@@ -71,7 +71,7 @@ public:
 private:
   static void static_cpp_callback(int32_t force,
                                   const pqrs_osx_accessibility_snapshot* snapshot) {
-    if (auto m = shared_monitor_; m) {
+    if (auto m = get_shared_monitor().lock()) {
       m->cpp_callback(force, snapshot);
     }
   }
