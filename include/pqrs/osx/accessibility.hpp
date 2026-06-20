@@ -12,11 +12,9 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <pqrs/cf/dictionary.hpp>
 
-namespace pqrs {
-namespace osx {
-namespace accessibility {
+namespace pqrs::osx::accessibility {
 
-inline bool is_process_trusted() {
+[[nodiscard]] inline bool is_process_trusted() noexcept {
   return AXIsProcessTrusted();
 }
 
@@ -26,6 +24,4 @@ inline bool is_process_trusted_with_prompt() {
   return AXIsProcessTrustedWithOptions(*options);
 }
 
-} // namespace accessibility
-} // namespace osx
-} // namespace pqrs
+} // namespace pqrs::osx::accessibility
