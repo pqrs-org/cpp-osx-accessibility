@@ -7,7 +7,13 @@ CLANG_FORMAT_FILES = \
 	'*.cpp' \
 	':(exclude)vendor/**'
 
-format: clang-format
+all: clang-format swift-format swiftlint
 
 clang-format:
 	git ls-files -z -- $(CLANG_FORMAT_FILES) | xargs -0 clang-format -i
+
+swift-format:
+	git ls-files -z -- '*.swift' | xargs -0 swift-format -i
+
+swiftlint:
+	swiftlint
