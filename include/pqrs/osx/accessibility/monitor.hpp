@@ -41,6 +41,8 @@ public:
     detach_from_dispatcher();
   }
 
+  // initialize_shared_monitor and terminate_shared_monitor are expected to be
+  // called serially during application lifecycle transitions.
   static void initialize_shared_monitor(std::weak_ptr<dispatcher::dispatcher> weak_dispatcher) {
     std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
 
