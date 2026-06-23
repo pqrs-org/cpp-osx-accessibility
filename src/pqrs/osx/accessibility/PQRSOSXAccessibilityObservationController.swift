@@ -13,9 +13,17 @@ private let observedAccessibilityNotifications: [CFString] = [
   kAXWindowResizedNotification as CFString,
 ]
 
-private let accessibilityObserverCallback: AXObserverCallback = { _, _, _, _ in
+private let accessibilityObserverCallback: AXObserverCallback = { _, _, _, refcon in
+  guard let refcon else {
+    return
+  }
+
+  let callbackGeneration = Int(bitPattern: refcon)
   Task { @MainActor in
-    PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
+    PQRSOSXAccessibilityMonitor.shared.requestRefresh(
+      force: false,
+      callbackGeneration: callbackGeneration
+    )
   }
 }
 
@@ -30,11 +38,14 @@ final class PQRSOSXAccessibilityObservationController {
   private var observersByPID: [pid_t: AXObserver] = [:]
   // The current frontmost PID used to keep frontmost-app observation attached.
   private var frontmostProcessIdentifier: pid_t?
+  private var callbackGeneration = 0
 
-  func start() {
+  func start(callbackGeneration: Int) {
     guard activationObserver == nil, terminationObserver == nil else {
       return
     }
+
+    self.callbackGeneration = callbackGeneration
 
     activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.didActivateApplicationNotification,
@@ -46,7 +57,7 @@ final class PQRSOSXAccessibilityObservationController {
       }
 
       Task { @MainActor in
-        self.requestRefresh()
+        self.requestRefresh(callbackGeneration: callbackGeneration)
       }
     }
 
@@ -65,11 +76,11 @@ final class PQRSOSXAccessibilityObservationController {
           .processIdentifier
 
         self.pruneProcessIdentifier(processIdentifier)
-        self.requestRefresh()
+        self.requestRefresh(callbackGeneration: callbackGeneration)
       }
     }
 
-    requestRefresh()
+    requestRefresh(callbackGeneration: callbackGeneration)
   }
 
   func stop() {
@@ -91,6 +102,7 @@ final class PQRSOSXAccessibilityObservationController {
     observerManagedPIDs.removeAll()
     observersByPID.removeAll()
     frontmostProcessIdentifier = nil
+    callbackGeneration = 0
   }
 
   func registerProcessIdentifier(_ processIdentifier: pid_t?, detectionSource: DetectionSource) {
@@ -142,9 +154,12 @@ final class PQRSOSXAccessibilityObservationController {
     }
   }
 
-  private func requestRefresh() {
+  private func requestRefresh(callbackGeneration: Int) {
     Task { @MainActor in
-      PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
+      PQRSOSXAccessibilityMonitor.shared.requestRefresh(
+        force: false,
+        callbackGeneration: callbackGeneration
+      )
     }
   }
 
@@ -186,7 +201,12 @@ final class PQRSOSXAccessibilityObservationController {
     var registered = false
 
     for notification in observedAccessibilityNotifications {
-      let error = AXObserverAddNotification(observer, applicationElement, notification, nil)
+      let error = AXObserverAddNotification(
+        observer,
+        applicationElement,
+        notification,
+        UnsafeMutableRawPointer(bitPattern: callbackGeneration)
+      )
       if error == .success {
         registered = true
       }

@@ -17,30 +17,40 @@ final class PQRSOSXAccessibilityMonitor {
   private var refreshInFlight = false
   private var refreshPending = false
   private var forcePending = false
+  private var callbackGeneration = 0
 
   func setCallback(_ callback: @escaping PQRSOSXAccessibilityMonitorCallback) {
+    if self.callback == nil {
+      callbackGeneration += 1
+    }
+
     self.callback = callback
 
     if observationController == nil {
       observationController = PQRSOSXAccessibilityObservationController()
     }
 
-    observationController?.start()
+    let callbackGeneration = callbackGeneration
+
+    observationController?.start(callbackGeneration: callbackGeneration)
 
     if fallbackPollingTask == nil {
+      let callbackGeneration = callbackGeneration
       fallbackPollingTask = Task {
-        await listenLoop()
+        await listenLoop(callbackGeneration: callbackGeneration)
       }
     }
 
     if staleProcessCleanupTask == nil {
+      let callbackGeneration = callbackGeneration
       staleProcessCleanupTask = Task {
-        await cleanupLoop()
+        await cleanupLoop(callbackGeneration: callbackGeneration)
       }
     }
   }
 
   func unsetCallback() {
+    callbackGeneration += 1
     callback = nil
     fallbackPollingTask?.cancel()
     fallbackPollingTask = nil
@@ -54,13 +64,14 @@ final class PQRSOSXAccessibilityMonitor {
     let observationController = observationController
     self.observationController = nil
     observationController?.stop()
+    frontmostWindowGeometryCache.removeAll()
   }
 
   func trigger() {
     requestRefresh(force: true)
   }
 
-  private func listenLoop() async {
+  private func listenLoop(callbackGeneration: Int) async {
     while !Task.isCancelled {
       do {
         try await Task.sleep(for: fallbackPollingInterval)
@@ -68,15 +79,23 @@ final class PQRSOSXAccessibilityMonitor {
         break
       }
 
+      guard isCurrentCallbackGeneration(callbackGeneration) else {
+        break
+      }
+
       refreshIfPollingNeedsSnapshot()
     }
   }
 
-  private func cleanupLoop() async {
+  private func cleanupLoop(callbackGeneration: Int) async {
     while !Task.isCancelled {
       do {
         try await Task.sleep(for: staleProcessCleanupInterval)
       } catch {
+        break
+      }
+
+      guard isCurrentCallbackGeneration(callbackGeneration) else {
         break
       }
 
@@ -85,6 +104,10 @@ final class PQRSOSXAccessibilityMonitor {
   }
 
   func requestRefresh(force: Bool) {
+    guard callback != nil else {
+      return
+    }
+
     forcePending = forcePending || force
     refreshPending = true
 
@@ -121,6 +144,18 @@ final class PQRSOSXAccessibilityMonitor {
     }
 
     refreshInFlight = false
+  }
+
+  func requestRefresh(force: Bool, callbackGeneration: Int) {
+    guard isCurrentCallbackGeneration(callbackGeneration) else {
+      return
+    }
+
+    requestRefresh(force: force)
+  }
+
+  private func isCurrentCallbackGeneration(_ callbackGeneration: Int) -> Bool {
+    self.callbackGeneration == callbackGeneration && callback != nil
   }
 
   // In general, information about the currently focused application can be obtained through the following mechanisms:
