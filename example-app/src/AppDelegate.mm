@@ -148,7 +148,7 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
       });
     });
 
-    monitor->async_trigger();
+    monitor->trigger();
   }
 }
 

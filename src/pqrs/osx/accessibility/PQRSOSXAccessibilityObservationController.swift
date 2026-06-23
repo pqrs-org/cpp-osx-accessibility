@@ -14,8 +14,8 @@ private let observedAccessibilityNotifications: [CFString] = [
 ]
 
 private let accessibilityObserverCallback: AXObserverCallback = { _, _, _, _ in
-  Task {
-    await PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
+  Task { @MainActor in
+    PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
   }
 }
 
@@ -143,8 +143,8 @@ final class PQRSOSXAccessibilityObservationController {
   }
 
   private func requestRefresh() {
-    Task {
-      await PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
+    Task { @MainActor in
+      PQRSOSXAccessibilityMonitor.shared.requestRefresh(force: false)
     }
   }
 
