@@ -57,6 +57,10 @@ final class PQRSOSXAccessibilityObservationController {
       }
 
       Task { @MainActor in
+        guard self.isCurrentCallbackGeneration(callbackGeneration) else {
+          return
+        }
+
         self.requestRefresh(callbackGeneration: callbackGeneration)
       }
     }
@@ -71,6 +75,10 @@ final class PQRSOSXAccessibilityObservationController {
       }
 
       Task { @MainActor in
+        guard self.isCurrentCallbackGeneration(callbackGeneration) else {
+          return
+        }
+
         let processIdentifier =
           (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
           .processIdentifier
@@ -161,6 +169,10 @@ final class PQRSOSXAccessibilityObservationController {
         callbackGeneration: callbackGeneration
       )
     }
+  }
+
+  private func isCurrentCallbackGeneration(_ callbackGeneration: Int) -> Bool {
+    self.callbackGeneration == callbackGeneration
   }
 
   func syncObservers(frontmostProcessIdentifier: pid_t?) {

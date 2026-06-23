@@ -52,9 +52,16 @@ public:
   }
 
   static void terminate_shared_monitor() {
-    std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
+    std::shared_ptr<monitor> monitor;
 
-    shared_monitor_ = nullptr;
+    {
+      std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
+
+      // Move shared_monitor_ out so that the monitor destructor runs after releasing
+      // shared_monitor_mutex_. The destructor synchronously calls into Swift, which can
+      // re-enter static_cpp_callback and take this mutex via get_shared_monitor().
+      monitor = std::move(shared_monitor_);
+    }
   }
 
   // Return a weak_ptr instead of a shared_ptr to keep the use_count of shared_monitor_ as close to 1 as possible,
