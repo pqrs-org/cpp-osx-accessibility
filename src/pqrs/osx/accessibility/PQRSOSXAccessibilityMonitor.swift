@@ -6,6 +6,41 @@ import AppKit
 import ApplicationServices
 
 extension PQRSOSXAccessibility {
+  // Serializes refresh requests and coalesces requests made while a refresh is
+  // already in progress. The caller owns the actual snapshot evaluation loop.
+  struct RefreshRequestState {
+    private var refreshInFlight = false
+    private var refreshPending = false
+    private var forcePending = false
+
+    // Returns true only for the request that must start the evaluation loop.
+    mutating func request(force: Bool) -> Bool {
+      forcePending = forcePending || force
+      refreshPending = true
+
+      guard !refreshInFlight else {
+        return false
+      }
+
+      refreshInFlight = true
+      return true
+    }
+
+    // Returns the next coalesced force value. Returning nil drains the queue and
+    // releases the in-flight state so a later request can start a new loop.
+    mutating func takePendingForce() -> Bool? {
+      guard refreshPending else {
+        refreshInFlight = false
+        return nil
+      }
+
+      refreshPending = false
+      let force = forcePending
+      forcePending = false
+      return force
+    }
+  }
+
   private struct ProcessIdentifierObservation {
     private(set) var changedGeneration: UInt64 = 0
     private var hasObservedValue = false
@@ -54,16 +89,16 @@ extension PQRSOSXAccessibility {
       generation &+= 1
 
       let axChanged = ax.observe(
-        processIdentifiers.ax,
+        processIdentifiers.axPid,
         generation: generation
       )
       let workspaceChanged = workspace.observe(
-        processIdentifiers.workspace,
+        processIdentifiers.workspacePid,
         generation: generation
       )
 
       let preferredDetectionSource: DetectionSource? =
-        if processIdentifiers.ax == processIdentifiers.workspace {
+        if processIdentifiers.axPid == processIdentifiers.workspacePid {
           nil
         } else if workspace.changedGeneration > ax.changedGeneration {
           .workspace
@@ -72,9 +107,9 @@ extension PQRSOSXAccessibility {
         }
 
       let validAXProcessIdentifier =
-        processIdentifiers.ax.flatMap { $0 == 0 ? nil : $0 }
+        processIdentifiers.axPid.flatMap { $0 == 0 ? nil : $0 }
       let validWorkspaceProcessIdentifier =
-        processIdentifiers.workspace.flatMap { $0 == 0 ? nil : $0 }
+        processIdentifiers.workspacePid.flatMap { $0 == 0 ? nil : $0 }
 
       let processIdentifier: pid_t?
       switch preferredDetectionSource {
@@ -117,9 +152,7 @@ extension PQRSOSXAccessibility {
     private var lastSnapshot = Snapshot(application: nil, focusedUIElement: nil)
     private var processIdentifierObservations =
       PQRSOSXAccessibility.FrontmostProcessIdentifierObservations()
-    private var refreshInFlight = false
-    private var refreshPending = false
-    private var forcePending = false
+    private var refreshRequestState = PQRSOSXAccessibility.RefreshRequestState()
     private var callbackGeneration = 0
 
     func setCallback(_ callback: @escaping MonitorCallback) {
@@ -161,9 +194,7 @@ extension PQRSOSXAccessibility {
       staleProcessCleanupTask = nil
       lastSnapshot = Snapshot(application: nil, focusedUIElement: nil)
       processIdentifierObservations = PQRSOSXAccessibility.FrontmostProcessIdentifierObservations()
-      refreshInFlight = false
-      refreshPending = false
-      forcePending = false
+      refreshRequestState = PQRSOSXAccessibility.RefreshRequestState()
 
       let observationController = observationController
       self.observationController = nil
@@ -216,21 +247,11 @@ extension PQRSOSXAccessibility {
         return
       }
 
-      forcePending = forcePending || force
-      refreshPending = true
-
-      guard !refreshInFlight else {
+      guard refreshRequestState.request(force: force) else {
         return
       }
 
-      refreshInFlight = true
-
-      while refreshPending {
-        refreshPending = false
-
-        let force = forcePending
-        forcePending = false
-
+      while let force = refreshRequestState.takePendingForce() {
         let cachedApplication = lastSnapshot.application
         let observationController = observationController
         let snapshot = copySnapshot(
@@ -255,7 +276,6 @@ extension PQRSOSXAccessibility {
         }
       }
 
-      refreshInFlight = false
     }
 
     func requestRefresh(force: Bool, callbackGeneration: Int) {

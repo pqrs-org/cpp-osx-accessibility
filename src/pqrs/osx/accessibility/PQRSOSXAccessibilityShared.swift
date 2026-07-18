@@ -162,8 +162,8 @@ struct Snapshot: Sendable, Equatable {
 
 extension PQRSOSXAccessibility {
   struct FrontmostProcessIdentifiers: Sendable, Equatable {
-    let ax: pid_t?
-    let workspace: pid_t?
+    let axPid: pid_t?
+    let workspacePid: pid_t?
   }
 
   struct FrontmostProcessIdentifierResolution: Sendable, Equatable {
@@ -178,12 +178,12 @@ extension PQRSOSXAccessibility {
     workspaceFrontmostApplication: NSRunningApplication?
   ) -> FrontmostProcessIdentifiers {
     FrontmostProcessIdentifiers(
-      ax:
+      axPid:
         applicationElement
         .flatMap(copyPid(_:))
         ?? systemWideFocusedUIElement
         .flatMap(copyPid(_:)),
-      workspace: workspaceFrontmostApplication?.processIdentifier
+      workspacePid: workspaceFrontmostApplication?.processIdentifier
     )
   }
 
@@ -217,7 +217,7 @@ func resolveFrontmostApplication(
   switch resolution.detectionSource {
   case .workspace:
     handleProcessIdentifier(
-      resolution.sourceProcessIdentifiers.workspace,
+      resolution.sourceProcessIdentifiers.workspacePid,
       .workspace
     )
   case .axObserver:
@@ -228,11 +228,11 @@ func resolveFrontmostApplication(
     // to the AX-only process. This also lets later convergence or termination
     // remove the extra AXObserver through the normal synchronization path.
     handleProcessIdentifier(
-      resolution.sourceProcessIdentifiers.workspace,
+      resolution.sourceProcessIdentifiers.workspacePid,
       .workspace
     )
     handleProcessIdentifier(
-      resolution.sourceProcessIdentifiers.ax,
+      resolution.sourceProcessIdentifiers.axPid,
       .axObserver
     )
   case .none:
