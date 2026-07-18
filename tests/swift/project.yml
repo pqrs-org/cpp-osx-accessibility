@@ -11,6 +11,7 @@ targets:
       - path: ../../src
       - path: FrontmostProcessIdentifierObservationsTests.swift
       - path: RefreshRequestStateTests.swift
+      - path: ResolveFrontmostApplicationTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
