@@ -5,17 +5,19 @@
 import AppKit
 import ApplicationServices
 
+public enum PQRSOSXAccessibility {
+  public typealias MonitorCallback =
+    @Sendable @convention(c) (
+      Int32,
+      UnsafePointer<pqrs_osx_accessibility_snapshot>?
+    ) -> Void
+}
+
 enum DetectionSource: Int32, Sendable, Equatable {
   case none = 0
   case workspace = 1
   case axObserver = 2
 }
-
-public typealias PQRSOSXAccessibilityMonitorCallback =
-  @Sendable @convention(c) (
-    Int32,
-    UnsafePointer<pqrs_osx_accessibility_snapshot>?
-  ) -> Void
 
 struct WindowPosition: Sendable, Equatable {
   let x: Double
@@ -158,56 +160,58 @@ struct Snapshot: Sendable, Equatable {
   let focusedUIElement: FocusedUIElement?
 }
 
-struct FrontmostProcessIdentifiers: Sendable, Equatable {
-  let ax: pid_t?
-  let workspace: pid_t?
-}
+extension PQRSOSXAccessibility {
+  struct FrontmostProcessIdentifiers: Sendable, Equatable {
+    let ax: pid_t?
+    let workspace: pid_t?
+  }
 
-struct FrontmostProcessIdentifierResolution: Sendable, Equatable {
-  let processIdentifier: pid_t?
-  let detectionSource: DetectionSource
-  let sourceProcessIdentifiers: FrontmostProcessIdentifiers
-}
+  struct FrontmostProcessIdentifierResolution: Sendable, Equatable {
+    let processIdentifier: pid_t?
+    let detectionSource: DetectionSource
+    let sourceProcessIdentifiers: FrontmostProcessIdentifiers
+  }
 
-func makeFrontmostProcessIdentifiers(
-  applicationElement: AXUIElement?,
-  systemWideFocusedUIElement: AXUIElement?,
-  workspaceFrontmostApplication: NSRunningApplication?
-) -> FrontmostProcessIdentifiers {
-  FrontmostProcessIdentifiers(
-    ax:
-      applicationElement
-      .flatMap(copyPid(_:))
-      ?? systemWideFocusedUIElement
-      .flatMap(copyPid(_:)),
-    workspace: workspaceFrontmostApplication?.processIdentifier
-  )
-}
+  static func makeFrontmostProcessIdentifiers(
+    applicationElement: AXUIElement?,
+    systemWideFocusedUIElement: AXUIElement?,
+    workspaceFrontmostApplication: NSRunningApplication?
+  ) -> FrontmostProcessIdentifiers {
+    FrontmostProcessIdentifiers(
+      ax:
+        applicationElement
+        .flatMap(copyPid(_:))
+        ?? systemWideFocusedUIElement
+        .flatMap(copyPid(_:)),
+      workspace: workspaceFrontmostApplication?.processIdentifier
+    )
+  }
 
-@MainActor
-func copyFrontmostProcessIdentifiers() -> FrontmostProcessIdentifiers {
-  let systemWideElement = AXUIElementCreateSystemWide()
-  let (_, applicationElement) = copyAXUIElementAttributeValue(
-    systemWideElement,
-    kAXFocusedApplicationAttribute as CFString
-  )
-  let (_, systemWideFocusedUIElement) = copyAXUIElementAttributeValue(
-    systemWideElement,
-    kAXFocusedUIElementAttribute as CFString
-  )
+  @MainActor
+  static func copyFrontmostProcessIdentifiers() -> FrontmostProcessIdentifiers {
+    let systemWideElement = AXUIElementCreateSystemWide()
+    let (_, applicationElement) = copyAXUIElementAttributeValue(
+      systemWideElement,
+      kAXFocusedApplicationAttribute as CFString
+    )
+    let (_, systemWideFocusedUIElement) = copyAXUIElementAttributeValue(
+      systemWideElement,
+      kAXFocusedUIElementAttribute as CFString
+    )
 
-  return makeFrontmostProcessIdentifiers(
-    applicationElement: applicationElement,
-    systemWideFocusedUIElement: systemWideFocusedUIElement,
-    workspaceFrontmostApplication: NSWorkspace.shared.frontmostApplication
-  )
+    return makeFrontmostProcessIdentifiers(
+      applicationElement: applicationElement,
+      systemWideFocusedUIElement: systemWideFocusedUIElement,
+      workspaceFrontmostApplication: NSWorkspace.shared.frontmostApplication
+    )
+  }
 }
 
 @MainActor
 func resolveFrontmostApplication(
   cachedApplication: FrontmostApplication?,
   workspaceFrontmostApplication: NSRunningApplication?,
-  resolution: FrontmostProcessIdentifierResolution,
+  resolution: PQRSOSXAccessibility.FrontmostProcessIdentifierResolution,
   handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
 ) -> FrontmostApplication? {
   switch resolution.detectionSource {
@@ -416,8 +420,8 @@ func copyFrontmostWindowGeometry(_ processIdentifier: pid_t) -> WindowGeometry? 
 func copySnapshot(
   cachedApplication: FrontmostApplication?,
   resolveProcessIdentifiers: (
-    FrontmostProcessIdentifiers
-  ) -> FrontmostProcessIdentifierResolution,
+    PQRSOSXAccessibility.FrontmostProcessIdentifiers
+  ) -> PQRSOSXAccessibility.FrontmostProcessIdentifierResolution,
   handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
 ) -> Snapshot {
   let systemWideElement = AXUIElementCreateSystemWide()
@@ -431,7 +435,7 @@ func copySnapshot(
     kAXFocusedUIElementAttribute as CFString
   )
 
-  let processIdentifiers = makeFrontmostProcessIdentifiers(
+  let processIdentifiers = PQRSOSXAccessibility.makeFrontmostProcessIdentifiers(
     applicationElement: applicationElement,
     systemWideFocusedUIElement: systemWideFocusedUIElement,
     workspaceFrontmostApplication: workspaceFrontmostApplication
