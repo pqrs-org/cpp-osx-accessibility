@@ -5,6 +5,101 @@
 import AppKit
 import ApplicationServices
 
+private struct ProcessIdentifierObservation {
+  private(set) var changedGeneration: UInt64 = 0
+  private var hasObservedValue = false
+  private var value: pid_t?
+
+  mutating func observe(_ value: pid_t?, generation: UInt64) -> Bool {
+    guard !hasObservedValue || self.value != value else {
+      return false
+    }
+
+    hasObservedValue = true
+    self.value = value
+    changedGeneration = generation
+    return true
+  }
+}
+
+// Tracks AX and Workspace PID changes and resolves the frontmost application:
+//
+// AX and Workspace can change at different times. An unbundled GUI application
+// may update only Workspace, while Spotlight may update only AX. The generation
+// in which each PID last changed is recorded to resolve such disagreements.
+// Sources changed in the same observation receive the same generation.
+//
+// - Prefer the source whose PID changed in a later observation generation.
+// - If both changed in the same generation, prefer AX. AX-only state occurs in
+//   ordinary macOS behavior such as Spotlight, while Workspace-only state is
+//   mainly needed for exceptional cases such as an unbundled GUI executable.
+//   Consequently, if the monitor starts while an unbundled GUI application is
+//   already frontmost and AX still reports another application, AX is selected
+//   until either source changes.
+// - Fall back to the other source when the preferred source has no valid PID.
+// - Classify a PID also reported by Workspace as Workspace-detected; a selected
+//   AX-only PID requires AXObserver management.
+private struct FrontmostProcessIdentifierObservations {
+  private var generation: UInt64 = 0
+  private var ax = ProcessIdentifierObservation()
+  private var workspace = ProcessIdentifierObservation()
+
+  mutating func observe(
+    _ processIdentifiers: FrontmostProcessIdentifiers
+  ) -> (changed: Bool, resolution: FrontmostProcessIdentifierResolution) {
+    generation &+= 1
+
+    let axChanged = ax.observe(
+      processIdentifiers.ax,
+      generation: generation
+    )
+    let workspaceChanged = workspace.observe(
+      processIdentifiers.workspace,
+      generation: generation
+    )
+
+    let preferredDetectionSource: DetectionSource? =
+      if processIdentifiers.ax == processIdentifiers.workspace {
+        nil
+      } else if workspace.changedGeneration > ax.changedGeneration {
+        .workspace
+      } else {
+        .axObserver
+      }
+
+    let validAXProcessIdentifier =
+      processIdentifiers.ax.flatMap { $0 == 0 ? nil : $0 }
+    let validWorkspaceProcessIdentifier =
+      processIdentifiers.workspace.flatMap { $0 == 0 ? nil : $0 }
+
+    let processIdentifier: pid_t?
+    switch preferredDetectionSource {
+    case .some(.workspace):
+      processIdentifier = validWorkspaceProcessIdentifier ?? validAXProcessIdentifier
+    case .some(.axObserver), .some(.none), nil:
+      processIdentifier = validAXProcessIdentifier ?? validWorkspaceProcessIdentifier
+    }
+
+    let detectionSource: DetectionSource =
+      if processIdentifier == nil {
+        .none
+      } else if processIdentifier == validWorkspaceProcessIdentifier {
+        .workspace
+      } else {
+        .axObserver
+      }
+
+    return (
+      axChanged || workspaceChanged,
+      FrontmostProcessIdentifierResolution(
+        processIdentifier: processIdentifier,
+        detectionSource: detectionSource,
+        sourceProcessIdentifiers: processIdentifiers
+      )
+    )
+  }
+}
+
 @MainActor
 final class PQRSOSXAccessibilityMonitor {
   static let shared = PQRSOSXAccessibilityMonitor()
@@ -14,6 +109,7 @@ final class PQRSOSXAccessibilityMonitor {
   private var staleProcessCleanupTask: Task<Void, Never>?
   private var observationController: PQRSOSXAccessibilityObservationController?
   private var lastSnapshot = Snapshot(application: nil, focusedUIElement: nil)
+  private var processIdentifierObservations = FrontmostProcessIdentifierObservations()
   private var refreshInFlight = false
   private var refreshPending = false
   private var forcePending = false
@@ -57,6 +153,7 @@ final class PQRSOSXAccessibilityMonitor {
     staleProcessCleanupTask?.cancel()
     staleProcessCleanupTask = nil
     lastSnapshot = Snapshot(application: nil, focusedUIElement: nil)
+    processIdentifierObservations = FrontmostProcessIdentifierObservations()
     refreshInFlight = false
     refreshPending = false
     forcePending = false
@@ -103,6 +200,10 @@ final class PQRSOSXAccessibilityMonitor {
     }
   }
 
+  // Notifications, polling, and trigger() all converge here. If a refresh is
+  // already running, record the pending request instead of evaluating another
+  // snapshot recursively. The loop then evaluates the latest state serially and
+  // coalesces multiple requests into as few snapshots as possible.
   func requestRefresh(force: Bool) {
     guard callback != nil else {
       return
@@ -127,6 +228,10 @@ final class PQRSOSXAccessibilityMonitor {
       let observationController = observationController
       let snapshot = copySnapshot(
         cachedApplication: cachedApplication,
+        resolveProcessIdentifiers: { processIdentifiers in
+          self.processIdentifierObservations.observe(processIdentifiers)
+            .resolution
+        },
         handleProcessIdentifier: { processIdentifier, detectionSource in
           observationController?.registerProcessIdentifier(
             processIdentifier,
@@ -163,13 +268,17 @@ final class PQRSOSXAccessibilityMonitor {
   // - Application switches can be detected via NSWorkspace.didActivateApplicationNotification.
   // - Window position and size changes can be detected via Accessibility notifications.
   //
-  // However, some applications do not work with these mechanisms. Specifically, there are two categories:
+  // However, some applications do not work with these mechanisms. Specifically, there are three categories:
   //
   // - Applications such as Spotlight, where NSWorkspace.didActivateApplicationNotification is not delivered.
   //   (Once the application has been detected at least once and AXObserverAddNotification has been registered for its process,
   //   subsequent detections can be made via kAXFocusedUIElementChangedNotification.)
   // - Applications such as Google Chrome and Electron-based apps that do not provide sufficient information through Accessibility.
   //   (window position and size changes cannot be obtained from notifications).
+  // - Unbundled GUI applications, such as some Rust GUI applications launched
+  //   directly as a single executable, that update NSWorkspace.frontmostApplication without delivering
+  //   NSWorkspace.didActivateApplicationNotification, while Accessibility may
+  //   continue to report the previously focused application.
   //
   // For these applications, notification-based detection is not sufficient, so polling is required.
   // In particular, Spotlight-style application switches can be missed unless polling runs at a fairly high frequency.
@@ -178,13 +287,21 @@ final class PQRSOSXAccessibilityMonitor {
   // Because this polling needs to stay lightweight, requestRefresh is called only when necessary.
   // More specifically, requestRefresh is triggered only in the following cases:
   //
-  // - When polling detects an application switch.
+  // - When polling detects a change in either the Accessibility or NSWorkspace
+  //   frontmost application. These sources are checked separately because an
+  //   unbundled GUI application may update only NSWorkspace, whereas a transient
+  //   system UI such as Spotlight may update only Accessibility.
   // - When the current application's window position or size could not be obtained through the Accessibility API.
   //   (requestRefresh is called in order to fetch the latest window position and size.)
   private func refreshIfPollingNeedsSnapshot() {
-    let frontmostProcessIdentifier = copyFrontmostProcessIdentifier()
-    let applicationChanged =
-      frontmostProcessIdentifier != lastSnapshot.application?.processIdentifier
+    let processIdentifiers = copyFrontmostProcessIdentifiers()
+    // AX and NSWorkspace do not always change together. Observe both sources so
+    // an application switch reported by either one schedules a full snapshot.
+    let applicationChanged = processIdentifierObservations.observe(processIdentifiers).changed
+
+    // Some applications do not expose window geometry through Accessibility.
+    // Their geometry comes from Core Graphics, which has no corresponding AX
+    // move/resize notification, so it must be refreshed on every polling tick.
     let needsGeometryPolling =
       lastSnapshot.focusedUIElement?.windowGeometrySource == .coreGraphics
 
