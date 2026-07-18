@@ -1,0 +1,22 @@
+name: AccessibilityMonitorTests
+options:
+  bundleIdPrefix: org.pqrs
+
+targets:
+  AccessibilityMonitorTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: ../../src
+      - path: FrontmostProcessIdentifierObservationsTests.swift
+      - path: RefreshRequestStateTests.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        OTHER_SWIFT_FLAGS: "-warnings-as-errors"
+        PRODUCT_BUNDLE_IDENTIFIER: org.pqrs.AccessibilityMonitorTests
+        SWIFT_OBJC_BRIDGING_HEADER: ../../include/pqrs/osx/accessibility/impl/Bridging-Header.h
+        SYSTEM_HEADER_SEARCH_PATHS:
+          - ../../include
+          - ../../vendor/vendor/include

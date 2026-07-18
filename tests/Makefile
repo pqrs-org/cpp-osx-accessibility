@@ -5,6 +5,8 @@ all:
 			make -C $$d || exit 1; \
 		fi; \
 	done
+	@echo "[Test] swift"
+	@make -C swift
 
 clean:
 	@for d in `find * -type d`; do \
@@ -12,3 +14,4 @@ clean:
 			make -C $$d clean; \
 		fi; \
 	done
+	@make -C swift clean
