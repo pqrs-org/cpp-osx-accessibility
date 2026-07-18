@@ -94,6 +94,12 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
       if (auto& bundleIdentifier = application_ptr->get_bundle_identifier()) {
         [lines addObject:[NSString stringWithFormat:@"Bundle ID: %@", makeUTF8String(bundleIdentifier)]];
       }
+      if (auto& bundlePath = application_ptr->get_bundle_path()) {
+        [lines addObject:[NSString stringWithFormat:@"Bundle path: %@", makeUTF8String(bundlePath)]];
+      }
+      if (auto& filePath = application_ptr->get_file_path()) {
+        [lines addObject:[NSString stringWithFormat:@"File path: %@", makeUTF8String(filePath)]];
+      }
       if (auto& pid = application_ptr->get_pid()) {
         [lines addObject:[NSString stringWithFormat:@"PID: %d", *pid]];
       }
@@ -194,14 +200,14 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
   self.permissionLabel = makeLabel(NSMakeRect(20, 276, 640, 20), 12, NSColor.secondaryLabelColor);
   [contentView addSubview:self.permissionLabel];
 
-  self.applicationLabel = makeLabel(NSMakeRect(20, 196, 640, 64), 13, NSColor.labelColor);
+  self.applicationLabel = makeLabel(NSMakeRect(20, 164, 640, 96), 13, NSColor.labelColor);
   self.applicationLabel.usesSingleLineMode = NO;
   [contentView addSubview:self.applicationLabel];
 
-  self.roleLabel = makeLabel(NSMakeRect(20, 160, 640, 20), 13, NSColor.labelColor);
+  self.roleLabel = makeLabel(NSMakeRect(20, 136, 640, 20), 13, NSColor.labelColor);
   [contentView addSubview:self.roleLabel];
 
-  self.detailLabel = makeLabel(NSMakeRect(20, 24, 640, 124), 13, NSColor.secondaryLabelColor);
+  self.detailLabel = makeLabel(NSMakeRect(20, 12, 640, 112), 13, NSColor.secondaryLabelColor);
   self.detailLabel.usesSingleLineMode = NO;
   [contentView addSubview:self.detailLabel];
 
