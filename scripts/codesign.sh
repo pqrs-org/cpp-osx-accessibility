@@ -6,6 +6,37 @@ set -e # forbid command failure
 readonly PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export PATH
 
+trap "printf '\033[0m'" EXIT
+
+set_normal_color() {
+    printf '\033[32;49m'
+}
+
+set_error_color() {
+    printf '\033[31;49m'
+}
+
+run_with_result_color() {
+    local output
+    local status
+
+    if output=$("$@" 2>&1); then
+        set_normal_color
+        if [[ -n $output ]]; then
+            printf '%s\n' "$output"
+        fi
+    else
+        status=$?
+        set_error_color
+        if [[ -n $output ]]; then
+            printf '%s\n' "$output" >&2
+        fi
+        return "$status"
+    fi
+}
+
+set_normal_color
+
 readonly CODE_SIGN_IDENTITY=$(bash $(dirname $0)/get-codesign-identity.sh)
 
 if [[ -z $CODE_SIGN_IDENTITY ]]; then
@@ -13,24 +44,22 @@ if [[ -z $CODE_SIGN_IDENTITY ]]; then
     exit 0
 fi
 
-#
-# Define err()
-#
-
-err() {
-    echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $@" >&2
+do_codesign() {
+    run_with_result_color codesign \
+        --force \
+        --deep \
+        --options runtime \
+        --sign "$CODE_SIGN_IDENTITY" \
+        "$1"
 }
 
-#
-# Define main()
-#
+if [[ ! -e "$1" ]]; then
+    set_error_color
+    echo "Invalid argument: '$1'"
+    exit 1
+fi
 
-main() {
-    if [[ ! -e "$1" ]]; then
-        err "Invalid argument: '$1'"
-        exit 1
-    fi
-
+if [[ -d "$1" ]]; then
     #
     # Sign with codesign
     #
@@ -41,44 +70,26 @@ main() {
         # output message
         #
 
-        echo -ne '\033[33;40m'
         echo "code sign $f"
-        echo -ne '\033[0m'
 
         #
         # codesign
         #
 
-        echo -ne '\033[31;40m'
-
-        set +e # allow command failure
-
-        codesign \
-            --force \
-            --deep \
-            --options runtime \
-            --sign "$CODE_SIGN_IDENTITY" \
-            "$f" 2>&1 |
-            grep -v ': replacing existing signature'
-
-        set -e # forbid command failure
-
-        echo -ne '\033[0m'
+        do_codesign "$f"
     done
 
     #
-    # Verify codesign
+    # Verify nested codesign (--deep)
     #
 
     find * -name '*.app' -or -path '*/bin/*' | sort -r | while read f; do
-        echo -ne '\033[31;40m'
-        codesign --verify --deep "$f"
-        echo -ne '\033[0m'
+        run_with_result_color codesign --verify --deep "$f"
     done
-}
+else
+    #
+    # Sign a file
+    #
 
-#
-# Run
-#
-
-main "$1"
+    do_codesign "$1"
+fi
