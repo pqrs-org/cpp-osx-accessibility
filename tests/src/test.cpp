@@ -54,6 +54,7 @@ int main() {
     a.set_role("AXTextArea")
         .set_subrole("AXSearchField")
         .set_identifier("spotlight-search")
+        .set_window_title("Spotlight")
         .set_window_position_x(10.0)
         .set_window_position_y(20.0)
         .set_window_size_width(30.0)
@@ -63,6 +64,7 @@ int main() {
     b.set_role("AXTextArea")
         .set_subrole("AXSearchField")
         .set_identifier("spotlight-search")
+        .set_window_title("Spotlight")
         .set_window_position_x(10.0)
         .set_window_position_y(20.0)
         .set_window_size_width(30.0)
@@ -84,6 +86,7 @@ int main() {
     expect(!e.get_title());
     expect(!e.get_description());
     expect(!e.get_identifier());
+    expect(!e.get_window_title());
     expect(!e.get_window_position_x());
     expect(!e.get_window_position_y());
     expect(!e.get_window_size_width());
@@ -95,6 +98,7 @@ int main() {
         .set_title("Search")
         .set_description("Spotlight search")
         .set_identifier("spotlight-search")
+        .set_window_title("Spotlight")
         .set_window_position_x(10.0)
         .set_window_position_y(20.0)
         .set_window_size_width(30.0)
@@ -106,6 +110,7 @@ int main() {
     expect(e.get_title() == "Search");
     expect(e.get_description() == "Spotlight search");
     expect(e.get_identifier() == "spotlight-search");
+    expect(e.get_window_title() == "Spotlight");
     expect(e.get_window_position_x() == 10.0);
     expect(e.get_window_position_y() == 20.0);
     expect(e.get_window_size_width() == 30.0);

@@ -142,6 +142,9 @@ private:
     if (snapshot.identifier) {
       result->set_identifier(snapshot.identifier);
     }
+    if (snapshot.window_title) {
+      result->set_window_title(snapshot.window_title);
+    }
     if (snapshot.has_window_position != 0) {
       result->set_window_position_x(snapshot.window_position_x);
       result->set_window_position_y(snapshot.window_position_y);

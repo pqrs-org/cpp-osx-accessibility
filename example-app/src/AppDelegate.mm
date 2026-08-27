@@ -137,6 +137,9 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
       if (auto& identifier = focused_ui_element_ptr->get_identifier()) {
         [lines addObject:[NSString stringWithFormat:@"Identifier: %@", makeUTF8String(identifier)]];
       }
+      if (auto& windowTitle = focused_ui_element_ptr->get_window_title()) {
+        [lines addObject:[NSString stringWithFormat:@"Focused window title: %@", makeUTF8String(windowTitle)]];
+      }
       if (auto string = makePointString(focused_ui_element_ptr->get_window_position_x(),
                                         focused_ui_element_ptr->get_window_position_y())) {
         [lines addObject:[NSString stringWithFormat:@"Focused window position: %@", string]];

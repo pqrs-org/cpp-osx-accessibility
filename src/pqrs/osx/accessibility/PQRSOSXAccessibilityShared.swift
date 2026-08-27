@@ -92,6 +92,7 @@ struct FocusedUIElement: Sendable, Equatable {
   let title: String?
   let description: String?
   let identifier: String?
+  let windowTitle: String?
   let windowPosition: WindowPosition?
   let windowSize: WindowSize?
   let windowGeometrySource: WindowGeometrySource
@@ -103,17 +104,16 @@ struct FocusedUIElement: Sendable, Equatable {
     title = nil
     description = nil
     identifier = nil
+    windowTitle = nil
     windowPosition = windowGeometry?.position
     windowSize = windowGeometry?.size
     windowGeometrySource = windowGeometry?.isEmpty == false ? .coreGraphics : .none
   }
 
   @MainActor
-  init(
-    _ element: AXUIElement,
-    applicationElement: AXUIElement?,
-    processIdentifier: pid_t?
-  ) {
+  init(_ context: FocusedUIElementAXContext, processIdentifier: pid_t?) {
+    let element = context.element
+
     role = copyAttribute(element, kAXRoleAttribute as CFString)
     subrole = copyAttribute(element, kAXSubroleAttribute as CFString)
     roleDescription = copyAttribute(element, kAXRoleDescriptionAttribute as CFString)
@@ -121,11 +121,9 @@ struct FocusedUIElement: Sendable, Equatable {
     description = copyAttribute(element, kAXDescriptionAttribute as CFString)
     identifier = copyAttribute(element, kAXIdentifierAttribute as CFString)
 
-    let windowElement =
-      (copyAttribute(element, kAXWindowAttribute as CFString) as AXUIElement?)
-      ?? applicationElement.flatMap {
-        copyAttribute($0, kAXFocusedWindowAttribute as CFString) as AXUIElement?
-      }
+    let windowElement = context.elementWindow ?? context.focusedWindow
+
+    windowTitle = context.windowTitle
 
     let axWindowGeometry =
       windowElement
@@ -152,6 +150,55 @@ struct FocusedUIElement: Sendable, Equatable {
     } else {
       windowGeometrySource = .none
     }
+  }
+}
+
+struct FocusedUIElementAXContext {
+  let element: AXUIElement
+  let topLevelUIElement: AXUIElement?
+  let elementWindow: AXUIElement?
+  let focusedWindow: AXUIElement?
+  let windowTitle: String?
+  let titleNotificationElements: [AXUIElement]
+
+  init(element: AXUIElement, applicationElement: AXUIElement?) {
+    self.element = element
+    let topLevelUIElement: AXUIElement? = copyAttribute(
+      element,
+      kAXTopLevelUIElementAttribute as CFString
+    )
+    let elementWindow: AXUIElement? = copyAttribute(
+      element,
+      kAXWindowAttribute as CFString
+    )
+    let focusedWindow: AXUIElement? = applicationElement.flatMap {
+      copyAttribute($0, kAXFocusedWindowAttribute as CFString)
+    }
+
+    self.topLevelUIElement = topLevelUIElement
+    self.elementWindow = elementWindow
+    self.focusedWindow = focusedWindow
+
+    let titleCandidates: [AXUIElement] = [topLevelUIElement, elementWindow, focusedWindow]
+      .compactMap { $0 }
+      .reduce(into: [AXUIElement]()) { result, element in
+        if !result.contains(where: { CFEqual($0, element) }) {
+          result.append(element)
+        }
+      }
+
+    var windowTitle: String?
+    var windowTitleElement: AXUIElement?
+    for candidate in titleCandidates {
+      if let title = copyNonEmptyStringAttribute(candidate, kAXTitleAttribute as CFString) {
+        windowTitle = title
+        windowTitleElement = candidate
+        break
+      }
+    }
+
+    self.windowTitle = windowTitle
+    titleNotificationElements = windowTitleElement.map { [$0] } ?? titleCandidates
   }
 }
 
@@ -265,6 +312,14 @@ func copyAttribute<T>(_ element: AXUIElement, _ attribute: CFString) -> T? {
   }
 
   return value as? T
+}
+
+func copyNonEmptyStringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+  guard let value: String = copyAttribute(element, attribute), !value.isEmpty else {
+    return nil
+  }
+
+  return value
 }
 
 func copyAXUIElementAttributeValue(_ element: AXUIElement, _ attribute: CFString) -> (
@@ -416,6 +471,11 @@ func copyFrontmostWindowGeometry(_ processIdentifier: pid_t) -> WindowGeometry? 
   return nil
 }
 
+struct SnapshotCopyResult {
+  let snapshot: Snapshot
+  let titleNotificationElements: [AXUIElement]
+}
+
 @MainActor
 func copySnapshot(
   cachedApplication: FrontmostApplication?,
@@ -423,7 +483,7 @@ func copySnapshot(
     PQRSOSXAccessibility.FrontmostProcessIdentifiers
   ) -> PQRSOSXAccessibility.FrontmostProcessIdentifierResolution,
   handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
-) -> Snapshot {
+) -> SnapshotCopyResult {
   let systemWideElement = AXUIElementCreateSystemWide()
   let workspaceFrontmostApplication = NSWorkspace.shared.frontmostApplication
   let (_, applicationElement) = copyAXUIElementAttributeValue(
@@ -448,9 +508,12 @@ func copySnapshot(
     handleProcessIdentifier: handleProcessIdentifier
   )
 
-  let applicationFocusedUIElement: AXUIElement? =
+  let resolvedApplicationElement =
     resolvedApplication?.processIdentifier
     .map(AXUIElementCreateApplication)
+
+  let applicationFocusedUIElement: AXUIElement? =
+    resolvedApplicationElement
     .flatMap { applicationElement in
       let (_, focusedUIElement) = copyAXUIElementAttributeValue(
         applicationElement,
@@ -459,13 +522,26 @@ func copySnapshot(
       return focusedUIElement
     }
 
+  let matchingSystemWideFocusedUIElement: AXUIElement?
+  if let element = systemWideFocusedUIElement,
+    let processIdentifier = resolvedApplication?.processIdentifier,
+    copyPid(element) == processIdentifier
+  {
+    matchingSystemWideFocusedUIElement = element
+  } else {
+    matchingSystemWideFocusedUIElement = nil
+  }
+
   let focusedElement: FocusedUIElement?
-  if let element = applicationFocusedUIElement ?? systemWideFocusedUIElement {
-    focusedElement = FocusedUIElement(
-      element,
-      applicationElement: applicationElement,
-      processIdentifier: resolvedApplication?.processIdentifier
+  let titleNotificationElements: [AXUIElement]
+  if let element = applicationFocusedUIElement ?? matchingSystemWideFocusedUIElement {
+    let context = FocusedUIElementAXContext(
+      element: element,
+      applicationElement: resolvedApplicationElement ?? applicationElement
     )
+    focusedElement = FocusedUIElement(
+      context, processIdentifier: resolvedApplication?.processIdentifier)
+    titleNotificationElements = context.titleNotificationElements
   } else if let processIdentifier = resolvedApplication?.processIdentifier {
     let fallbackWindowGeometry = copyFrontmostWindowGeometry(processIdentifier)
 
@@ -474,27 +550,19 @@ func copySnapshot(
     } else {
       focusedElement = nil
     }
+    titleNotificationElements = []
   } else {
     focusedElement = nil
+    titleNotificationElements = []
   }
 
-  return Snapshot(
-    application: resolvedApplication,
-    focusedUIElement: focusedElement
+  return SnapshotCopyResult(
+    snapshot: Snapshot(
+      application: resolvedApplication,
+      focusedUIElement: focusedElement
+    ),
+    titleNotificationElements: titleNotificationElements
   )
-}
-
-func withOptionalCString<Result>(
-  _ value: String?,
-  _ body: (UnsafePointer<CChar>?) -> Result
-) -> Result {
-  guard let value else {
-    return body(nil)
-  }
-
-  return value.withCString { pointer in
-    body(pointer)
-  }
 }
 
 // Some transient system UIs such as Spotlight do not reliably surface through

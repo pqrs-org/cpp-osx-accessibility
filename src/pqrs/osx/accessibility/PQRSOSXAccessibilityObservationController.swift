@@ -13,6 +13,21 @@ private let observedAccessibilityNotifications: [CFString] = [
   kAXWindowResizedNotification as CFString,
 ]
 
+private struct AccessibilityObserverRegistration {
+  let observer: AXObserver
+  var requestedTitleNotificationElements: [AXUIElement] = []
+  var titleNotificationElements: [AXUIElement] = []
+}
+
+private func containsAXUIElement(_ elements: [AXUIElement], _ candidate: AXUIElement) -> Bool {
+  elements.contains { CFEqual($0, candidate) }
+}
+
+private func containsSameAXUIElements(_ lhs: [AXUIElement], _ rhs: [AXUIElement]) -> Bool {
+  lhs.count == rhs.count
+    && lhs.allSatisfy { containsAXUIElement(rhs, $0) }
+}
+
 private let accessibilityObserverCallback: AXObserverCallback = { _, _, _, refcon in
   guard let refcon else {
     return
@@ -36,9 +51,10 @@ extension PQRSOSXAccessibility {
     private var workspaceKnownPIDs: Set<pid_t> = []
     // PIDs discovered outside NSWorkspace that still need AXObserver-based tracking.
     private var observerManagedPIDs: Set<pid_t> = []
-    private var observersByPID: [pid_t: AXObserver] = [:]
+    private var observerRegistrationsByPID: [pid_t: AccessibilityObserverRegistration] = [:]
     // The current frontmost PID used to keep frontmost-app observation attached.
     private var frontmostProcessIdentifier: pid_t?
+    private var frontmostTitleNotificationElements: [AXUIElement] = []
     private var callbackGeneration = 0
 
     func start(callbackGeneration: Int) {
@@ -103,14 +119,15 @@ extension PQRSOSXAccessibility {
         self.terminationObserver = nil
       }
 
-      for processIdentifier in Array(observersByPID.keys) {
+      for processIdentifier in Array(observerRegistrationsByPID.keys) {
         detachObserver(processIdentifier: processIdentifier)
       }
 
       workspaceKnownPIDs.removeAll()
       observerManagedPIDs.removeAll()
-      observersByPID.removeAll()
+      observerRegistrationsByPID.removeAll()
       frontmostProcessIdentifier = nil
+      frontmostTitleNotificationElements.removeAll()
       callbackGeneration = 0
     }
 
@@ -146,6 +163,7 @@ extension PQRSOSXAccessibility {
 
       if frontmostProcessIdentifier == processIdentifier {
         frontmostProcessIdentifier = nil
+        frontmostTitleNotificationElements.removeAll()
       }
 
       detachObserver(processIdentifier: processIdentifier)
@@ -155,7 +173,7 @@ extension PQRSOSXAccessibility {
       let knownProcessIdentifiers =
         workspaceKnownPIDs
         .union(observerManagedPIDs)
-        .union(observersByPID.keys)
+        .union(observerRegistrationsByPID.keys)
 
       for processIdentifier in knownProcessIdentifiers
       where NSRunningApplication(processIdentifier: processIdentifier) == nil {
@@ -176,8 +194,12 @@ extension PQRSOSXAccessibility {
       self.callbackGeneration == callbackGeneration
     }
 
-    func syncObservers(frontmostProcessIdentifier: pid_t?) {
+    func syncObservers(
+      frontmostProcessIdentifier: pid_t?,
+      titleNotificationElements: [AXUIElement]
+    ) {
       self.frontmostProcessIdentifier = frontmostProcessIdentifier
+      frontmostTitleNotificationElements = titleNotificationElements
 
       var targetPIDs = observerManagedPIDs.subtracting(workspaceKnownPIDs)
 
@@ -185,7 +207,7 @@ extension PQRSOSXAccessibility {
         targetPIDs.insert(frontmostProcessIdentifier)
       }
 
-      let stalePIDs = Set(observersByPID.keys).subtracting(targetPIDs)
+      let stalePIDs = Set(observerRegistrationsByPID.keys).subtracting(targetPIDs)
       for processIdentifier in stalePIDs {
         detachObserver(processIdentifier: processIdentifier)
       }
@@ -193,6 +215,57 @@ extension PQRSOSXAccessibility {
       for processIdentifier in targetPIDs {
         attachObserver(processIdentifier: processIdentifier)
       }
+
+      for processIdentifier in Array(observerRegistrationsByPID.keys) {
+        syncTitleNotifications(
+          processIdentifier: processIdentifier,
+          elements: processIdentifier == frontmostProcessIdentifier
+            ? titleNotificationElements : []
+        )
+      }
+    }
+
+    func windowTitleNeedsRefresh(currentWindowTitle: String?) -> Bool {
+      guard !frontmostTitleNotificationElements.isEmpty else {
+        return false
+      }
+
+      if let frontmostProcessIdentifier,
+        let registration = observerRegistrationsByPID[frontmostProcessIdentifier],
+        containsSameAXUIElements(
+          registration.requestedTitleNotificationElements,
+          registration.titleNotificationElements
+        )
+      {
+        return false
+      }
+
+      var didReadTitle = false
+      var latestWindowTitle: String?
+      for element in frontmostTitleNotificationElements {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+          element,
+          kAXTitleAttribute as CFString,
+          &value
+        )
+        guard error == .success else {
+          continue
+        }
+
+        didReadTitle = true
+        if let title = value as? String, !title.isEmpty {
+          latestWindowTitle = title
+          break
+        }
+      }
+
+      // A transient AX failure is not evidence that the title was cleared.
+      guard didReadTitle else {
+        return false
+      }
+
+      return latestWindowTitle != currentWindowTitle
     }
 
     private func attachObserver(processIdentifier: pid_t) {
@@ -200,7 +273,7 @@ extension PQRSOSXAccessibility {
         return
       }
 
-      guard observersByPID[processIdentifier] == nil else {
+      guard observerRegistrationsByPID[processIdentifier] == nil else {
         return
       }
 
@@ -235,14 +308,63 @@ extension PQRSOSXAccessibility {
         .commonModes
       )
 
-      observersByPID[processIdentifier] = observer
+      observerRegistrationsByPID[processIdentifier] = AccessibilityObserverRegistration(
+        observer: observer
+      )
+    }
+
+    private func syncTitleNotifications(processIdentifier: pid_t, elements: [AXUIElement]) {
+      guard var registration = observerRegistrationsByPID[processIdentifier] else {
+        return
+      }
+
+      // Registration errors are generally a capability limitation of the target
+      // application. Avoid retrying the same failed registrations on every
+      // snapshot; lightweight title polling covers them instead.
+      guard
+        !containsSameAXUIElements(
+          registration.requestedTitleNotificationElements,
+          elements
+        )
+      else {
+        return
+      }
+
+      for element in registration.titleNotificationElements
+      where !containsAXUIElement(elements, element) {
+        AXObserverRemoveNotification(
+          registration.observer,
+          element,
+          kAXTitleChangedNotification as CFString
+        )
+      }
+
+      var registeredElements = registration.titleNotificationElements.filter {
+        containsAXUIElement(elements, $0)
+      }
+
+      for element in elements where !containsAXUIElement(registeredElements, element) {
+        let error = AXObserverAddNotification(
+          registration.observer,
+          element,
+          kAXTitleChangedNotification as CFString,
+          UnsafeMutableRawPointer(bitPattern: callbackGeneration)
+        )
+        if error == .success || error == .notificationAlreadyRegistered {
+          registeredElements.append(element)
+        }
+      }
+
+      registration.requestedTitleNotificationElements = elements
+      registration.titleNotificationElements = registeredElements
+      observerRegistrationsByPID[processIdentifier] = registration
     }
 
     private func detachObserver(processIdentifier: pid_t) {
-      if let axObserver = observersByPID.removeValue(forKey: processIdentifier) {
+      if let registration = observerRegistrationsByPID.removeValue(forKey: processIdentifier) {
         CFRunLoopRemoveSource(
           CFRunLoopGetMain(),
-          AXObserverGetRunLoopSource(axObserver),
+          AXObserverGetRunLoopSource(registration.observer),
           .commonModes
         )
       }
