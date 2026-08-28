@@ -31,6 +31,9 @@ private:
       : dispatcher_client(weak_dispatcher),
         last_application_(std::make_shared<application>()),
         last_focused_ui_element_(std::make_shared<focused_ui_element>()) {
+  }
+
+  void register_callback() {
     pqrs_osx_accessibility_monitor_set_callback(static_cpp_callback);
   }
 
@@ -41,16 +44,38 @@ public:
     detach_from_dispatcher();
   }
 
-  // initialize_shared_monitor and terminate_shared_monitor are expected to be
-  // called serially during application lifecycle transitions.
+  // initialize_shared_monitor and terminate_shared_monitor must be called
+  // serially during application lifecycle transitions.
+  //
+  // terminate_shared_monitor may synchronously wait for a running dispatcher
+  // callback to finish. Signal handlers must therefore not synchronously wait
+  // for the thread that calls terminate_shared_monitor. Also, do not call
+  // termination directly from this monitor's signal handlers because that can
+  // destroy the monitor while its dispatcher callback is still running.
+  // Scheduling termination as a separate dispatcher task avoids both issues.
   static void initialize_shared_monitor(std::weak_ptr<dispatcher::dispatcher> weak_dispatcher) {
-    std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
+    auto m = std::shared_ptr<monitor>(new monitor(weak_dispatcher));
 
-    if (shared_monitor_) {
-      std::abort();
+    {
+      std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
+
+      if (shared_monitor_) {
+        std::abort();
+      }
+
+      shared_monitor_ = m;
     }
 
-    shared_monitor_ = std::shared_ptr<monitor>(new monitor(weak_dispatcher));
+    // register_callback must be called after assigning shared_monitor_ so that
+    // a callback delivered immediately during registration can retrieve the
+    // monitor. Swift currently schedules the initial refresh asynchronously,
+    // but that is an implementation detail and must not be relied upon by
+    // moving register_callback into the constructor.
+    //
+    // Registering the callback synchronously enters Swift on MainActor. Do not
+    // hold shared_monitor_mutex_ here because the callback can re-enter
+    // static_cpp_callback and acquire it via get_shared_monitor().
+    m->register_callback();
   }
 
   static void terminate_shared_monitor() {
