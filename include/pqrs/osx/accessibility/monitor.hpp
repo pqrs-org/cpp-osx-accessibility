@@ -48,8 +48,15 @@ public:
 
   // initialize_shared_monitor and terminate_shared_monitor must be called
   // serially during application lifecycle transitions.
+  // Every successful initialization must be paired with termination before
+  // the shared dispatcher is terminated or the last monitor reference is
+  // released.
   // External callers must not retrieve or use the shared monitor until
   // initialize_shared_monitor returns.
+  // They must also stop using any previously retrieved monitor before
+  // terminate_shared_monitor begins. Keeping a shared_ptr alive preserves the
+  // C++ object, but operations such as trigger target the process-wide Swift
+  // monitor and must not cross monitor lifecycle boundaries.
   //
   // terminate_shared_monitor may synchronously wait for a running dispatcher
   // callback to finish. Signal handlers must therefore not synchronously wait
