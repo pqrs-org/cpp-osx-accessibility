@@ -10,6 +10,7 @@ targets:
     sources:
       - path: ../../src
       - path: FrontmostProcessIdentifierObservationsTests.swift
+      - path: FocusedUIElementTests.swift
       - path: RefreshRequestStateTests.swift
       - path: ResolveFrontmostApplicationTests.swift
     settings:

@@ -93,9 +93,15 @@ struct FocusedUIElement: Sendable, Equatable {
   let description: String?
   let identifier: String?
   let windowTitle: String?
-  let windowPosition: WindowPosition?
-  let windowSize: WindowSize?
-  let windowGeometrySource: WindowGeometrySource
+  private(set) var windowPosition: WindowPosition?
+  private(set) var windowSize: WindowSize?
+  // Window geometry is obtained from Accessibility whenever it provides a usable
+  // position or size. Some applications expose neither value, so Core Graphics is
+  // used as a fallback. This source records which path supplied the current
+  // geometry; the monitor uses .coreGraphics to enable lightweight polling because
+  // Core Graphics does not provide the move and resize notifications available
+  // with .ax geometry.
+  private(set) var windowGeometrySource: WindowGeometrySource
 
   init(windowGeometry: WindowGeometry?) {
     role = nil
@@ -108,6 +114,14 @@ struct FocusedUIElement: Sendable, Equatable {
     windowPosition = windowGeometry?.position
     windowSize = windowGeometry?.size
     windowGeometrySource = windowGeometry?.isEmpty == false ? .coreGraphics : .none
+  }
+
+  func updatingCoreGraphicsWindowGeometry(_ windowGeometry: WindowGeometry?) -> Self {
+    var result = self
+    result.windowPosition = windowGeometry?.position
+    result.windowSize = windowGeometry?.size
+    result.windowGeometrySource = windowGeometry?.isEmpty == false ? .coreGraphics : .none
+    return result
   }
 
   @MainActor

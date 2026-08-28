@@ -381,8 +381,8 @@ extension PQRSOSXAccessibility {
     // In particular, Spotlight-style application switches can be missed unless polling runs at a fairly high frequency.
     // For that reason, polling is performed every 500 ms.
     //
-    // Because this polling needs to stay lightweight, requestRefresh is called only when necessary.
-    // More specifically, requestRefresh is triggered only in the following cases:
+    // Because this polling needs to stay lightweight, it updates state only when
+    // necessary. More specifically, an update is performed in the following cases:
     //
     // - When polling detects a change in either the Accessibility or NSWorkspace
     //   frontmost application. These sources are checked separately because an
@@ -397,13 +397,16 @@ extension PQRSOSXAccessibility {
       // AX and NSWorkspace do not always change together. Observe both sources so
       // an application switch reported by either one schedules a full snapshot.
       let applicationChanged = processIdentifierObservations.observe(processIdentifiers).changed
+      if applicationChanged {
+        requestRefresh(force: false)
+        return
+      }
 
       // Some applications do not expose window geometry through Accessibility.
       // Compare only the Core Graphics geometry on each polling tick and avoid
-      // building a full snapshot until it actually changes.
-      var needsGeometryRefresh = false
-      if !applicationChanged,
-        let applicationProcessIdentifier = lastSnapshot.application?.processIdentifier,
+      // querying the remaining snapshot fields when it actually changes.
+      var geometryUpdatedSnapshot: Snapshot?
+      if let applicationProcessIdentifier = lastSnapshot.application?.processIdentifier,
         let focusedUIElement = lastSnapshot.focusedUIElement,
         focusedUIElement.windowGeometrySource == .coreGraphics
       {
@@ -412,22 +415,29 @@ extension PQRSOSXAccessibility {
           position: focusedUIElement.windowPosition,
           size: focusedUIElement.windowSize
         )
-        needsGeometryRefresh = latestWindowGeometry != currentWindowGeometry
+        if latestWindowGeometry != currentWindowGeometry {
+          geometryUpdatedSnapshot = Snapshot(
+            application: lastSnapshot.application,
+            focusedUIElement: focusedUIElement.updatingCoreGraphicsWindowGeometry(
+              latestWindowGeometry
+            )
+          )
+        }
       }
 
       // If title notifications are unavailable, compare only AXTitle here and
-      // avoid building a full snapshot until the value actually changes. A full
-      // snapshot is already required for the other two conditions, so skip the
-      // extra Accessibility query in those cases.
-      let needsTitleRefresh =
-        !applicationChanged
-        && !needsGeometryRefresh
-        && observationController?.windowTitleNeedsRefresh(
-          currentWindowTitle: lastSnapshot.focusedUIElement?.windowTitle
-        ) == true
-
-      if applicationChanged || needsGeometryRefresh || needsTitleRefresh {
+      // avoid building a full snapshot until the value actually changes. If title
+      // and geometry change in the same tick, the full refresh also incorporates
+      // the new geometry from the Core Graphics cache.
+      if observationController?.windowTitleNeedsRefresh(
+        currentWindowTitle: lastSnapshot.focusedUIElement?.windowTitle
+      ) == true {
         requestRefresh(force: false)
+        return
+      }
+
+      if let geometryUpdatedSnapshot {
+        commitSnapshotAndEmit(geometryUpdatedSnapshot, force: false)
       }
     }
 
