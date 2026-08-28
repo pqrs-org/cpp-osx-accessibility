@@ -37,15 +37,19 @@ private:
     pqrs_osx_accessibility_monitor_set_callback(static_cpp_callback);
   }
 
-public:
-  ~monitor() override {
+  void unregister_callback_and_detach() {
     pqrs_osx_accessibility_monitor_unset_callback();
 
     detach_from_dispatcher();
   }
 
+public:
+  ~monitor() override = default;
+
   // initialize_shared_monitor and terminate_shared_monitor must be called
   // serially during application lifecycle transitions.
+  // External callers must not retrieve or use the shared monitor until
+  // initialize_shared_monitor returns.
   //
   // terminate_shared_monitor may synchronously wait for a running dispatcher
   // callback to finish. Signal handlers must therefore not synchronously wait
@@ -79,20 +83,29 @@ public:
   }
 
   static void terminate_shared_monitor() {
-    std::shared_ptr<monitor> monitor;
+    std::shared_ptr<monitor> m;
 
     {
       std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
 
-      // Move shared_monitor_ out so that the monitor destructor runs after releasing
-      // shared_monitor_mutex_. The destructor synchronously calls into Swift, which can
-      // re-enter static_cpp_callback and take this mutex via get_shared_monitor().
-      monitor = std::move(shared_monitor_);
+      // Stop new Swift callbacks from retrieving the monitor before detaching
+      // it from Swift and the dispatcher.
+      m = std::move(shared_monitor_);
+    }
+
+    if (m) {
+      // Perform synchronous cleanup while this local shared_ptr keeps the
+      // monitor alive. Cleanup must not be deferred to the destructor because
+      // another shared_ptr could make the destructor run later on an arbitrary
+      // thread.
+      m->unregister_callback_and_detach();
     }
   }
 
-  // Return a weak_ptr instead of a shared_ptr to keep the use_count of shared_monitor_ as close to 1 as possible,
-  // ensuring that terminate_shared_monitor will properly release shared_monitor_.
+  // Return a weak_ptr so that retrieving the shared monitor does not by itself
+  // extend its lifetime. A caller may temporarily lock the weak_ptr, but
+  // terminate_shared_monitor explicitly unregisters and detaches the monitor
+  // even while such shared_ptr instances remain alive.
   [[nodiscard]] static std::weak_ptr<monitor> get_shared_monitor() {
     std::lock_guard<std::mutex> guard(shared_monitor_mutex_);
 
