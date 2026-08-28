@@ -13,19 +13,120 @@ private let observedAccessibilityNotifications: [CFString] = [
   kAXWindowResizedNotification as CFString,
 ]
 
+private let accessibilityNotificationRetryClock = ContinuousClock()
+private let accessibilityNotificationRetryInterval = Duration.seconds(10)
+
+enum AccessibilityNotificationAddDisposition: Equatable {
+  // Record the notification as registered, including when it was already
+  // registered before this attempt.
+  case registered
+
+  // Preserve the pending registration and try it again after the retry interval.
+  case retry
+
+  // Stop trying to register the notification because retrying is not useful.
+  case stopTrying
+
+  // The observer itself is invalid, so discard all of its registrations and
+  // recreate it after the retry interval.
+  case invalidateObserver
+}
+
+func accessibilityNotificationAddDisposition(
+  _ error: AXError
+) -> AccessibilityNotificationAddDisposition {
+  switch error {
+  case .success, .notificationAlreadyRegistered:
+    return .registered
+
+  case .cannotComplete, .failure, .apiDisabled:
+    return .retry
+
+  case .invalidUIElementObserver:
+    return .invalidateObserver
+
+  default:
+    return .stopTrying
+  }
+}
+
+enum AccessibilityNotificationRemoveDisposition: Equatable {
+  // Stop tracking the registration because it has been removed or was not
+  // registered before this attempt.
+  case removed
+
+  // Preserve the tracked registration and try removing it again after the
+  // retry interval.
+  case retry
+
+  // Stop tracking the registration because retrying the removal is not useful.
+  case stopTracking
+
+  // The observer itself is invalid, so discard all of its registrations and
+  // recreate it after the retry interval.
+  case invalidateObserver
+}
+
+// Converts an AXObserverRemoveNotification result into the follow-up action.
+// A notification that is already unregistered is treated as removed, while
+// transient errors are retried and an invalid observer is recreated.
+func accessibilityNotificationRemoveDisposition(
+  _ error: AXError
+) -> AccessibilityNotificationRemoveDisposition {
+  switch error {
+  case .success, .notificationNotRegistered:
+    return .removed
+
+  case .cannotComplete, .failure, .apiDisabled:
+    return .retry
+
+  case .invalidUIElementObserver:
+    return .invalidateObserver
+
+  default:
+    return .stopTracking
+  }
+}
+
 private struct AccessibilityObserverRegistration {
   let observer: AXObserver
+  let applicationElement: AXUIElement
+  var applicationNotificationsToRetry = observedAccessibilityNotifications
+  var applicationNotificationRetryAfter: ContinuousClock.Instant?
   var requestedTitleNotificationElements: [AXUIElement] = []
   var titleNotificationElements: [AXUIElement] = []
+  var titleNotificationElementsToRetry: [AXUIElement] = []
+  var titleNotificationRetryAfter: ContinuousClock.Instant?
 }
 
 private func containsAXUIElement(_ elements: [AXUIElement], _ candidate: AXUIElement) -> Bool {
   elements.contains { CFEqual($0, candidate) }
 }
 
+private func containsAXUIElements(_ elements: [AXUIElement], _ candidates: [AXUIElement]) -> Bool {
+  candidates.allSatisfy { containsAXUIElement(elements, $0) }
+}
+
 private func containsSameAXUIElements(_ lhs: [AXUIElement], _ rhs: [AXUIElement]) -> Bool {
   lhs.count == rhs.count
-    && lhs.allSatisfy { containsAXUIElement(rhs, $0) }
+    && containsAXUIElements(lhs, rhs)
+}
+
+func titleNotificationsNeedSynchronization(
+  requestedElements: [AXUIElement],
+  registeredElements: [AXUIElement],
+  desiredElements: [AXUIElement]
+) -> Bool {
+  let requestedElementsAreUnchanged = containsSameAXUIElements(
+    requestedElements,
+    desiredElements
+  )
+  let registeredElementsContainNoStaleElements = containsAXUIElements(
+    desiredElements,
+    registeredElements
+  )
+
+  return !requestedElementsAreUnchanged || !registeredElementsContainNoStaleElements
 }
 
 private let accessibilityObserverCallback: AXObserverCallback = { _, _, _, refcon in
@@ -52,6 +153,7 @@ extension PQRSOSXAccessibility {
     // PIDs discovered outside NSWorkspace that still need AXObserver-based tracking.
     private var observerManagedPIDs: Set<pid_t> = []
     private var observerRegistrationsByPID: [pid_t: AccessibilityObserverRegistration] = [:]
+    private var observerAttachmentRetryAfterByPID: [pid_t: ContinuousClock.Instant] = [:]
     // The current frontmost PID used to keep frontmost-app observation attached.
     private var frontmostProcessIdentifier: pid_t?
     private var frontmostTitleNotificationElements: [AXUIElement] = []
@@ -126,6 +228,7 @@ extension PQRSOSXAccessibility {
       workspaceKnownPIDs.removeAll()
       observerManagedPIDs.removeAll()
       observerRegistrationsByPID.removeAll()
+      observerAttachmentRetryAfterByPID.removeAll()
       frontmostProcessIdentifier = nil
       frontmostTitleNotificationElements.removeAll()
       callbackGeneration = 0
@@ -174,6 +277,7 @@ extension PQRSOSXAccessibility {
         workspaceKnownPIDs
         .union(observerManagedPIDs)
         .union(observerRegistrationsByPID.keys)
+        .union(observerAttachmentRetryAfterByPID.keys)
 
       for processIdentifier in knownProcessIdentifiers
       where NSRunningApplication(processIdentifier: processIdentifier) == nil {
@@ -207,7 +311,9 @@ extension PQRSOSXAccessibility {
         targetPIDs.insert(frontmostProcessIdentifier)
       }
 
-      let stalePIDs = Set(observerRegistrationsByPID.keys).subtracting(targetPIDs)
+      let observerPIDs = Set(observerRegistrationsByPID.keys)
+        .union(observerAttachmentRetryAfterByPID.keys)
+      let stalePIDs = observerPIDs.subtracting(targetPIDs)
       for processIdentifier in stalePIDs {
         detachObserver(processIdentifier: processIdentifier)
       }
@@ -217,6 +323,7 @@ extension PQRSOSXAccessibility {
       }
 
       for processIdentifier in Array(observerRegistrationsByPID.keys) {
+        syncApplicationNotifications(processIdentifier: processIdentifier)
         syncTitleNotifications(
           processIdentifier: processIdentifier,
           elements: processIdentifier == frontmostProcessIdentifier
@@ -232,9 +339,9 @@ extension PQRSOSXAccessibility {
 
       if let frontmostProcessIdentifier,
         let registration = observerRegistrationsByPID[frontmostProcessIdentifier],
-        containsSameAXUIElements(
-          registration.requestedTitleNotificationElements,
-          registration.titleNotificationElements
+        containsAXUIElements(
+          registration.titleNotificationElements,
+          registration.requestedTitleNotificationElements
         )
       {
         return false
@@ -277,28 +384,28 @@ extension PQRSOSXAccessibility {
         return
       }
 
-      var observer: AXObserver?
-      let error = AXObserverCreate(processIdentifier, accessibilityObserverCallback, &observer)
-      guard error == .success, let observer else {
+      if let retryAfter = observerAttachmentRetryAfterByPID[processIdentifier],
+        retryAfter > accessibilityNotificationRetryClock.now
+      {
         return
       }
 
-      let applicationElement = AXUIElementCreateApplication(processIdentifier)
-      var registered = false
-
-      for notification in observedAccessibilityNotifications {
-        let error = AXObserverAddNotification(
-          observer,
-          applicationElement,
-          notification,
-          UnsafeMutableRawPointer(bitPattern: callbackGeneration)
-        )
-        if error == .success {
-          registered = true
-        }
+      var observer: AXObserver?
+      let error = AXObserverCreate(processIdentifier, accessibilityObserverCallback, &observer)
+      guard error == .success, let observer else {
+        observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+        return
       }
 
-      guard registered else {
+      observerAttachmentRetryAfterByPID.removeValue(forKey: processIdentifier)
+
+      let applicationElement = AXUIElementCreateApplication(processIdentifier)
+      var registration = AccessibilityObserverRegistration(
+        observer: observer,
+        applicationElement: applicationElement
+      )
+      guard attemptApplicationNotificationRegistration(&registration) else {
+        observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
         return
       }
 
@@ -308,9 +415,63 @@ extension PQRSOSXAccessibility {
         .commonModes
       )
 
-      observerRegistrationsByPID[processIdentifier] = AccessibilityObserverRegistration(
-        observer: observer
-      )
+      observerRegistrationsByPID[processIdentifier] = registration
+    }
+
+    private func syncApplicationNotifications(processIdentifier: pid_t) {
+      guard var registration = observerRegistrationsByPID[processIdentifier] else {
+        return
+      }
+
+      guard !registration.applicationNotificationsToRetry.isEmpty else {
+        return
+      }
+
+      if let retryAfter = registration.applicationNotificationRetryAfter,
+        retryAfter > accessibilityNotificationRetryClock.now
+      {
+        return
+      }
+
+      guard attemptApplicationNotificationRegistration(&registration) else {
+        detachObserver(processIdentifier: processIdentifier)
+        observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+        return
+      }
+
+      observerRegistrationsByPID[processIdentifier] = registration
+    }
+
+    // Returns false when the observer itself is invalid and must be recreated.
+    private func attemptApplicationNotificationRegistration(
+      _ registration: inout AccessibilityObserverRegistration
+    ) -> Bool {
+      var notificationsToRetry: [CFString] = []
+
+      for notification in registration.applicationNotificationsToRetry {
+        let error = AXObserverAddNotification(
+          registration.observer,
+          registration.applicationElement,
+          notification,
+          UnsafeMutableRawPointer(bitPattern: callbackGeneration)
+        )
+
+        switch accessibilityNotificationAddDisposition(error) {
+        case .registered, .stopTrying:
+          break
+        case .retry:
+          notificationsToRetry.append(notification)
+        case .invalidateObserver:
+          return false
+        }
+      }
+
+      registration.applicationNotificationsToRetry = notificationsToRetry
+      registration.applicationNotificationRetryAfter =
+        notificationsToRetry.isEmpty
+        ? nil
+        : notificationRetryAfter()
+      return true
     }
 
     private func syncTitleNotifications(processIdentifier: pid_t, elements: [AXUIElement]) {
@@ -318,46 +479,103 @@ extension PQRSOSXAccessibility {
         return
       }
 
-      // Registration errors are generally a capability limitation of the target
-      // application. Avoid retrying the same failed registrations on every
-      // snapshot; lightweight title polling covers them instead.
+      registration.titleNotificationElementsToRetry =
+        registration.titleNotificationElementsToRetry.filter {
+          containsAXUIElement(elements, $0)
+        }
+
+      let requestedElementsChanged = !containsSameAXUIElements(
+        registration.requestedTitleNotificationElements,
+        elements
+      )
       guard
-        !containsSameAXUIElements(
-          registration.requestedTitleNotificationElements,
-          elements
+        titleNotificationsNeedSynchronization(
+          requestedElements: registration.requestedTitleNotificationElements,
+          registeredElements: registration.titleNotificationElements,
+          desiredElements: elements
         )
+          || !registration.titleNotificationElementsToRetry.isEmpty
       else {
         return
       }
 
-      for element in registration.titleNotificationElements
-      where !containsAXUIElement(elements, element) {
-        AXObserverRemoveNotification(
+      if !requestedElementsChanged,
+        let retryAfter = registration.titleNotificationRetryAfter,
+        retryAfter > accessibilityNotificationRetryClock.now
+      {
+        return
+      }
+
+      var registeredElements: [AXUIElement] = []
+      var retryableElements = registration.titleNotificationElementsToRetry
+      var needsRetry = false
+      for element in registration.titleNotificationElements {
+        if containsAXUIElement(elements, element) {
+          registeredElements.append(element)
+          continue
+        }
+
+        let error = AXObserverRemoveNotification(
           registration.observer,
           element,
           kAXTitleChangedNotification as CFString
         )
+        switch accessibilityNotificationRemoveDisposition(error) {
+        case .removed, .stopTracking:
+          break
+        case .retry:
+          // Keep tracking the element so a later snapshot can retry removal.
+          registeredElements.append(element)
+          needsRetry = true
+        case .invalidateObserver:
+          detachObserver(processIdentifier: processIdentifier)
+          observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+          return
+        }
       }
 
-      var registeredElements = registration.titleNotificationElements.filter {
-        containsAXUIElement(elements, $0)
-      }
+      let elementsToRegister =
+        requestedElementsChanged
+        ? elements
+        : retryableElements
+      retryableElements.removeAll()
 
-      for element in elements where !containsAXUIElement(registeredElements, element) {
+      for element in elementsToRegister
+      where containsAXUIElement(elements, element)
+        && !containsAXUIElement(registeredElements, element)
+      {
         let error = AXObserverAddNotification(
           registration.observer,
           element,
           kAXTitleChangedNotification as CFString,
           UnsafeMutableRawPointer(bitPattern: callbackGeneration)
         )
-        if error == .success || error == .notificationAlreadyRegistered {
+        switch accessibilityNotificationAddDisposition(error) {
+        case .registered:
           registeredElements.append(element)
+        case .retry:
+          retryableElements.append(element)
+          needsRetry = true
+        case .stopTrying:
+          break
+        case .invalidateObserver:
+          detachObserver(processIdentifier: processIdentifier)
+          observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+          return
         }
       }
 
       registration.requestedTitleNotificationElements = elements
       registration.titleNotificationElements = registeredElements
+      registration.titleNotificationElementsToRetry = retryableElements
+      registration.titleNotificationRetryAfter = needsRetry ? notificationRetryAfter() : nil
       observerRegistrationsByPID[processIdentifier] = registration
+    }
+
+    private func notificationRetryAfter() -> ContinuousClock.Instant {
+      accessibilityNotificationRetryClock.now.advanced(
+        by: accessibilityNotificationRetryInterval
+      )
     }
 
     private func detachObserver(processIdentifier: pid_t) {
@@ -368,6 +586,7 @@ extension PQRSOSXAccessibility {
           .commonModes
         )
       }
+      observerAttachmentRetryAfterByPID.removeValue(forKey: processIdentifier)
     }
   }
 }

@@ -13,6 +13,7 @@ targets:
       - path: FocusedUIElementTests.swift
       - path: RefreshRequestStateTests.swift
       - path: ResolveFrontmostApplicationTests.swift
+      - path: TitleNotificationSynchronizationTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
