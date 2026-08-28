@@ -23,6 +23,12 @@ private let accessibilityNotificationRetryInterval = Duration.seconds(10)
 // preserving the existing observer for ordinary transient failures below it.
 private let maximumRetainedStaleTitleNotificationElements = 8
 
+func staleTitleNotificationElementsRequireObserverRecreation(
+  _ retainedElementCount: Int
+) -> Bool {
+  retainedElementCount >= maximumRetainedStaleTitleNotificationElements
+}
+
 enum AccessibilityNotificationAddDisposition: Equatable {
   // Record the notification as registered, including when it was already
   // registered before this attempt.
@@ -535,7 +541,7 @@ extension PQRSOSXAccessibility {
         }
       }
 
-      if retainedStaleElementCount >= maximumRetainedStaleTitleNotificationElements {
+      if staleTitleNotificationElementsRequireObserverRecreation(retainedStaleElementCount) {
         scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
         return
       }

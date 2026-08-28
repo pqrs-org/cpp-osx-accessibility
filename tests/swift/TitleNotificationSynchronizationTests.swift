@@ -84,4 +84,14 @@ final class TitleNotificationSynchronizationTests: XCTestCase {
       .invalidateObserver
     )
   }
+
+  // Stale title elements below the retention limit preserve the current observer.
+  func testStaleElementsBelowLimitPreserveObserver() {
+    XCTAssertFalse(staleTitleNotificationElementsRequireObserverRecreation(7))
+  }
+
+  // Reaching the stale title element retention limit recreates the observer.
+  func testStaleElementsAtLimitRecreateObserver() {
+    XCTAssertTrue(staleTitleNotificationElementsRequireObserverRecreation(8))
+  }
 }

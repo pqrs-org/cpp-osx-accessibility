@@ -79,6 +79,24 @@ private struct SnapshotCStringValues {
 }
 
 extension PQRSOSXAccessibility {
+  struct AccessibilityNotificationRefreshScheduleState {
+    private var scheduled = false
+
+    // Returns true only when the caller must create the delayed refresh task.
+    mutating func schedule() -> Bool {
+      guard !scheduled else {
+        return false
+      }
+
+      scheduled = true
+      return true
+    }
+
+    mutating func reset() {
+      scheduled = false
+    }
+  }
+
   // Serializes refresh requests and coalesces requests made while a refresh is
   // already in progress. The caller owns the actual snapshot evaluation loop.
   struct RefreshRequestState {
@@ -220,6 +238,8 @@ extension PQRSOSXAccessibility {
 
     private var callback: MonitorCallback?
     private var accessibilityNotificationRefreshTask: Task<Void, Never>?
+    private var accessibilityNotificationRefreshScheduleState =
+      PQRSOSXAccessibility.AccessibilityNotificationRefreshScheduleState()
     private var fallbackPollingTask: Task<Void, Never>?
     private var staleProcessCleanupTask: Task<Void, Never>?
     private var observationController: ObservationController?
@@ -370,7 +390,7 @@ extension PQRSOSXAccessibility {
         return
       }
 
-      guard accessibilityNotificationRefreshTask == nil else {
+      guard accessibilityNotificationRefreshScheduleState.schedule() else {
         return
       }
 
@@ -385,6 +405,7 @@ extension PQRSOSXAccessibility {
           return
         }
 
+        self.accessibilityNotificationRefreshScheduleState.reset()
         self.accessibilityNotificationRefreshTask = nil
         self.requestRefresh(
           force: false,
@@ -398,6 +419,7 @@ extension PQRSOSXAccessibility {
     }
 
     private func cancelScheduledAccessibilityNotificationRefresh() {
+      accessibilityNotificationRefreshScheduleState.reset()
       accessibilityNotificationRefreshTask?.cancel()
       accessibilityNotificationRefreshTask = nil
     }

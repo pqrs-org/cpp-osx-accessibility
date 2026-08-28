@@ -9,6 +9,7 @@ targets:
     deploymentTarget: "13.0"
     sources:
       - path: ../../src
+      - path: AccessibilityNotificationRefreshScheduleStateTests.swift
       - path: FrontmostProcessIdentifierObservationsTests.swift
       - path: FocusedUIElementTests.swift
       - path: RefreshRequestStateTests.swift
