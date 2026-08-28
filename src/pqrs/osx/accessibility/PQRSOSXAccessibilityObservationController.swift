@@ -15,6 +15,13 @@ private let observedAccessibilityNotifications: [CFString] = [
 
 private let accessibilityNotificationRetryClock = ContinuousClock()
 private let accessibilityNotificationRetryInterval = Duration.seconds(10)
+// A title element whose notification removal fails transiently must remain
+// retained so a later synchronization can retry the removal. If the focused
+// window keeps changing while removals continue to fail, these stale elements
+// and their notification registrations can accumulate. Recreate the observer
+// at this limit to release them as a group and bound resource usage, while
+// preserving the existing observer for ordinary transient failures below it.
+private let maximumRetainedStaleTitleNotificationElements = 8
 
 enum AccessibilityNotificationAddDisposition: Equatable {
   // Record the notification as registered, including when it was already
@@ -131,8 +138,7 @@ private let accessibilityObserverCallback: AXObserverCallback = { _, _, _, refco
 
   let callbackGeneration = Int(bitPattern: refcon)
   Task { @MainActor in
-    PQRSOSXAccessibility.Monitor.shared.requestRefresh(
-      force: false,
+    PQRSOSXAccessibility.Monitor.shared.scheduleAccessibilityNotificationRefresh(
       callbackGeneration: callbackGeneration
     )
   }
@@ -503,6 +509,7 @@ extension PQRSOSXAccessibility {
       var registeredElements: [AXUIElement] = []
       var retryableElements = registration.titleNotificationElementsToRetry
       var needsRetry = false
+      var retainedStaleElementCount = 0
       for element in registration.titleNotificationElements {
         if containsAXUIElement(elements, element) {
           registeredElements.append(element)
@@ -521,10 +528,16 @@ extension PQRSOSXAccessibility {
           // Keep tracking the element so a later snapshot can retry removal.
           registeredElements.append(element)
           needsRetry = true
+          retainedStaleElementCount += 1
         case .invalidateObserver:
           scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
           return
         }
+      }
+
+      if retainedStaleElementCount >= maximumRetainedStaleTitleNotificationElements {
+        scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
+        return
       }
 
       let elementsToRegister =

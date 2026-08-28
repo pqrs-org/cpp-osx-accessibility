@@ -5,6 +5,10 @@
 import AppKit
 import ApplicationServices
 
+// AX notifications for one UI change often arrive together. Delay their shared
+// refresh briefly so the whole burst can be handled by one snapshot.
+private let accessibilityNotificationRefreshCoalescingInterval = Duration.milliseconds(10)
+
 private func withOptionalCString<Result>(
   _ value: String?,
   _ body: (UnsafePointer<CChar>?) -> Result
@@ -215,6 +219,7 @@ extension PQRSOSXAccessibility {
     static let shared = Monitor()
 
     private var callback: MonitorCallback?
+    private var accessibilityNotificationRefreshTask: Task<Void, Never>?
     private var fallbackPollingTask: Task<Void, Never>?
     private var staleProcessCleanupTask: Task<Void, Never>?
     private var observationController: ObservationController?
@@ -257,6 +262,7 @@ extension PQRSOSXAccessibility {
     func unsetCallback() {
       callbackGeneration += 1
       callback = nil
+      cancelScheduledAccessibilityNotificationRefresh()
       fallbackPollingTask?.cancel()
       fallbackPollingTask = nil
       staleProcessCleanupTask?.cancel()
@@ -316,6 +322,9 @@ extension PQRSOSXAccessibility {
         return
       }
 
+      // Any immediate refresh also covers pending AX notifications.
+      cancelScheduledAccessibilityNotificationRefresh()
+
       guard refreshRequestState.request(force: force) else {
         return
       }
@@ -356,8 +365,41 @@ extension PQRSOSXAccessibility {
       requestRefresh(force: force)
     }
 
+    func scheduleAccessibilityNotificationRefresh(callbackGeneration: Int) {
+      guard isCurrentCallbackGeneration(callbackGeneration) else {
+        return
+      }
+
+      guard accessibilityNotificationRefreshTask == nil else {
+        return
+      }
+
+      accessibilityNotificationRefreshTask = Task { @MainActor [weak self] in
+        do {
+          try await Task.sleep(for: accessibilityNotificationRefreshCoalescingInterval)
+        } catch {
+          return
+        }
+
+        guard let self else {
+          return
+        }
+
+        self.accessibilityNotificationRefreshTask = nil
+        self.requestRefresh(
+          force: false,
+          callbackGeneration: callbackGeneration
+        )
+      }
+    }
+
     private func isCurrentCallbackGeneration(_ callbackGeneration: Int) -> Bool {
       self.callbackGeneration == callbackGeneration && callback != nil
+    }
+
+    private func cancelScheduledAccessibilityNotificationRefresh() {
+      accessibilityNotificationRefreshTask?.cancel()
+      accessibilityNotificationRefreshTask = nil
     }
 
     // In general, information about the currently focused application can be obtained through the following mechanisms:
