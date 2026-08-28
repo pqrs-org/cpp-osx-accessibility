@@ -60,6 +60,14 @@ final class TitleNotificationSynchronizationTests: XCTestCase {
     )
   }
 
+  // Removing a notification that is no longer registered stops tracking it.
+  func testMissingRegistrationRemovalStopsTracking() {
+    XCTAssertEqual(
+      accessibilityNotificationRemoveDisposition(.notificationNotRegistered),
+      .stopTracking
+    )
+  }
+
   // An invalid AX element can no longer deliver notifications, so its
   // registration is no longer tracked.
   func testInvalidElementRemovalStopsTracking() {

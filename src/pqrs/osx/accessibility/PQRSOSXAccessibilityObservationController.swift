@@ -51,15 +51,12 @@ func accessibilityNotificationAddDisposition(
 }
 
 enum AccessibilityNotificationRemoveDisposition: Equatable {
-  // Stop tracking the registration because it has been removed or was not
-  // registered before this attempt.
-  case removed
-
   // Preserve the tracked registration and try removing it again after the
   // retry interval.
   case retry
 
-  // Stop tracking the registration because retrying the removal is not useful.
+  // Stop tracking the registration because it has already been removed or
+  // retrying the removal is not useful.
   case stopTracking
 
   // The observer itself is invalid, so discard all of its registrations and
@@ -68,15 +65,13 @@ enum AccessibilityNotificationRemoveDisposition: Equatable {
 }
 
 // Converts an AXObserverRemoveNotification result into the follow-up action.
-// A notification that is already unregistered is treated as removed, while
-// transient errors are retried and an invalid observer is recreated.
+// Successful removals, missing registrations, and errors that cannot benefit
+// from a retry all stop tracking the registration. Transient errors are retried,
+// and an invalid observer is recreated.
 func accessibilityNotificationRemoveDisposition(
   _ error: AXError
 ) -> AccessibilityNotificationRemoveDisposition {
   switch error {
-  case .success, .notificationNotRegistered:
-    return .removed
-
   case .cannotComplete, .failure, .apiDisabled:
     return .retry
 
@@ -393,7 +388,7 @@ extension PQRSOSXAccessibility {
       var observer: AXObserver?
       let error = AXObserverCreate(processIdentifier, accessibilityObserverCallback, &observer)
       guard error == .success, let observer else {
-        observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+        scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
         return
       }
 
@@ -405,7 +400,7 @@ extension PQRSOSXAccessibility {
         applicationElement: applicationElement
       )
       guard attemptApplicationNotificationRegistration(&registration) else {
-        observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+        scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
         return
       }
 
@@ -434,8 +429,7 @@ extension PQRSOSXAccessibility {
       }
 
       guard attemptApplicationNotificationRegistration(&registration) else {
-        detachObserver(processIdentifier: processIdentifier)
-        observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+        scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
         return
       }
 
@@ -521,15 +515,14 @@ extension PQRSOSXAccessibility {
           kAXTitleChangedNotification as CFString
         )
         switch accessibilityNotificationRemoveDisposition(error) {
-        case .removed, .stopTracking:
+        case .stopTracking:
           break
         case .retry:
           // Keep tracking the element so a later snapshot can retry removal.
           registeredElements.append(element)
           needsRetry = true
         case .invalidateObserver:
-          detachObserver(processIdentifier: processIdentifier)
-          observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+          scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
           return
         }
       }
@@ -559,8 +552,7 @@ extension PQRSOSXAccessibility {
         case .stopTrying:
           break
         case .invalidateObserver:
-          detachObserver(processIdentifier: processIdentifier)
-          observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
+          scheduleObserverAttachmentRetry(processIdentifier: processIdentifier)
           return
         }
       }
@@ -576,6 +568,11 @@ extension PQRSOSXAccessibility {
       accessibilityNotificationRetryClock.now.advanced(
         by: accessibilityNotificationRetryInterval
       )
+    }
+
+    private func scheduleObserverAttachmentRetry(processIdentifier: pid_t) {
+      detachObserver(processIdentifier: processIdentifier)
+      observerAttachmentRetryAfterByPID[processIdentifier] = notificationRetryAfter()
     }
 
     private func detachObserver(processIdentifier: pid_t) {
