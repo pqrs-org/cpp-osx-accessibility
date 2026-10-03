@@ -79,6 +79,6 @@ private:
   std::optional<std::string> bundle_path_;
   std::optional<std::string> file_path_;
   std::optional<pid_t> pid_;
-  detection_source detection_source_ = detection_source::none;
+  detection_source detection_source_{detection_source::none};
 };
 } // namespace pqrs::osx::accessibility
