@@ -32,9 +32,7 @@ private:
   monitor(const monitor&) = delete;
 
   monitor(std::weak_ptr<dispatcher::dispatcher> weak_dispatcher)
-      : dispatcher_client(weak_dispatcher),
-        last_application_(std::make_shared<application>()),
-        last_focused_ui_element_(std::make_shared<focused_ui_element>()) {
+      : dispatcher_client(weak_dispatcher) {
     dispatcher_client_constructor_exception_guard_.initialize();
   }
 
@@ -237,7 +235,7 @@ private:
   static inline std::shared_ptr<monitor> shared_monitor_;
   static inline std::mutex shared_monitor_mutex_;
 
-  pqrs::not_null_shared_ptr_t<application> last_application_;
-  pqrs::not_null_shared_ptr_t<focused_ui_element> last_focused_ui_element_;
+  pqrs::not_null_shared_ptr_t<application> last_application_{std::make_shared<application>()};
+  pqrs::not_null_shared_ptr_t<focused_ui_element> last_focused_ui_element_{std::make_shared<focused_ui_element>()};
 };
 } // namespace pqrs::osx::accessibility
