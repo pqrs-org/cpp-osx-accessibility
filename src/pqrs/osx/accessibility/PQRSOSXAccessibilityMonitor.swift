@@ -79,6 +79,40 @@ private struct SnapshotCStringValues {
 }
 
 extension PQRSOSXAccessibility {
+  struct FocusedUIElementRetryState {
+    private var processIdentifier: pid_t?
+    // nil permits a new recovery attempt; zero records an exhausted attempt.
+    private var remainingRetryCount: Int?
+
+    mutating func update(processIdentifier: pid_t?, focusedRole: String?) {
+      if self.processIdentifier != processIdentifier {
+        self.processIdentifier = processIdentifier
+        remainingRetryCount = nil
+      }
+
+      let hasFocusedRole = focusedRole?.isEmpty == false
+      guard processIdentifier != nil, !hasFocusedRole else {
+        remainingRetryCount = nil
+        return
+      }
+
+      if remainingRetryCount == nil {
+        // Allow bounded fallback polls for asynchronous AX initialisation,
+        // without continually rebuilding snapshots for inaccessible applications.
+        remainingRetryCount = focusedUIElementRoleRecoveryMaxPolls
+      }
+    }
+
+    mutating func takeRetry() -> Bool {
+      guard let remainingRetryCount, remainingRetryCount > 0 else {
+        return false
+      }
+
+      self.remainingRetryCount = remainingRetryCount - 1
+      return true
+    }
+  }
+
   struct AccessibilityNotificationRefreshScheduleState {
     private var scheduled = false
 
@@ -234,8 +268,19 @@ extension PQRSOSXAccessibility {
 extension PQRSOSXAccessibility {
   @MainActor
   final class Monitor {
+    typealias SnapshotReader =
+      @MainActor (
+        FrontmostApplication?,
+        (FrontmostProcessIdentifiers) -> FrontmostProcessIdentifierResolution,
+        (pid_t?, DetectionSource) -> Void
+      ) -> SnapshotCopyResult
+
     static let shared = Monitor()
 
+    private let readSnapshot: SnapshotReader
+    private let readProcessIdentifiers: @MainActor () -> FrontmostProcessIdentifiers
+    private let readWindowGeometry: @MainActor (pid_t) -> WindowGeometry?
+    private let makeObservationController: @MainActor () -> ObservationController?
     private var callback: MonitorCallback?
     private var accessibilityNotificationRefreshTask: Task<Void, Never>?
     private var accessibilityNotificationRefreshScheduleState =
@@ -247,7 +292,24 @@ extension PQRSOSXAccessibility {
     private var processIdentifierObservations =
       PQRSOSXAccessibility.FrontmostProcessIdentifierObservations()
     private var refreshRequestState = PQRSOSXAccessibility.RefreshRequestState()
+    private var focusedUIElementRetryState = PQRSOSXAccessibility.FocusedUIElementRetryState()
     private var callbackGeneration = 0
+
+    init(
+      readSnapshot: @escaping SnapshotReader = copySnapshot,
+      readProcessIdentifiers: @escaping @MainActor () -> FrontmostProcessIdentifiers =
+        PQRSOSXAccessibility.copyFrontmostProcessIdentifiers,
+      readWindowGeometry: @escaping @MainActor (pid_t) -> WindowGeometry? =
+        copyFrontmostWindowGeometry,
+      makeObservationController: @escaping @MainActor () -> ObservationController? = {
+        ObservationController()
+      }
+    ) {
+      self.readSnapshot = readSnapshot
+      self.readProcessIdentifiers = readProcessIdentifiers
+      self.readWindowGeometry = readWindowGeometry
+      self.makeObservationController = makeObservationController
+    }
 
     func setCallback(_ callback: @escaping MonitorCallback) {
       if self.callback == nil {
@@ -257,7 +319,7 @@ extension PQRSOSXAccessibility {
       self.callback = callback
 
       if observationController == nil {
-        observationController = ObservationController()
+        observationController = makeObservationController()
       }
 
       let callbackGeneration = callbackGeneration
@@ -290,6 +352,7 @@ extension PQRSOSXAccessibility {
       lastSnapshot = Snapshot(application: nil, focusedUIElement: nil)
       processIdentifierObservations = PQRSOSXAccessibility.FrontmostProcessIdentifierObservations()
       refreshRequestState = PQRSOSXAccessibility.RefreshRequestState()
+      focusedUIElementRetryState = PQRSOSXAccessibility.FocusedUIElementRetryState()
 
       let observationController = observationController
       self.observationController = nil
@@ -352,13 +415,13 @@ extension PQRSOSXAccessibility {
       while let force = refreshRequestState.takePendingForce() {
         let cachedApplication = lastSnapshot.application
         let observationController = observationController
-        let result = copySnapshot(
-          cachedApplication: cachedApplication,
-          resolveProcessIdentifiers: { processIdentifiers in
+        let result = readSnapshot(
+          cachedApplication,
+          { processIdentifiers in
             self.processIdentifierObservations.observe(processIdentifiers)
               .resolution
           },
-          handleProcessIdentifier: { processIdentifier, detectionSource in
+          { processIdentifier, detectionSource in
             observationController?.registerProcessIdentifier(
               processIdentifier,
               detectionSource: detectionSource
@@ -368,6 +431,10 @@ extension PQRSOSXAccessibility {
         observationController?.syncObservers(
           frontmostProcessIdentifier: result.snapshot.application?.processIdentifier,
           titleNotificationElements: result.titleNotificationElements
+        )
+        focusedUIElementRetryState.update(
+          processIdentifier: result.snapshot.application?.processIdentifier,
+          focusedRole: result.snapshot.focusedUIElement?.role
         )
 
         if force || result.snapshot != lastSnapshot {
@@ -452,16 +519,29 @@ extension PQRSOSXAccessibility {
     //   frontmost application. These sources are checked separately because an
     //   unbundled GUI application may update only NSWorkspace, whereas a transient
     //   system UI such as Spotlight may update only Accessibility.
+    // - While a bounded recovery attempt is pending because the focused element
+    //   or its role was unavailable, including during AX initialisation.
     // - When lightweight Core Graphics polling detects a geometry change for a
     //   window whose position or size could not be obtained through Accessibility.
     // - When lightweight title polling detects a change for a window that does not
     //   support title-change notifications.
-    private func refreshIfPollingNeedsSnapshot() {
-      let processIdentifiers = PQRSOSXAccessibility.copyFrontmostProcessIdentifiers()
+    func refreshIfPollingNeedsSnapshot() {
+      guard callback != nil else {
+        return
+      }
+
+      let processIdentifiers = readProcessIdentifiers()
       // AX and NSWorkspace do not always change together. Observe both sources so
       // an application switch reported by either one schedules a full snapshot.
       let applicationChanged = processIdentifierObservations.observe(processIdentifiers).changed
       if applicationChanged {
+        requestRefresh(force: false)
+        return
+      }
+
+      if focusedUIElementRetryState.takeRetry() {
+        // A recovery snapshot also acquires geometry and available titles, so
+        // it replaces the lightweight checks below at the cost of extra AX work.
         requestRefresh(force: false)
         return
       }
@@ -474,7 +554,7 @@ extension PQRSOSXAccessibility {
         let focusedUIElement = lastSnapshot.focusedUIElement,
         focusedUIElement.windowGeometrySource == .coreGraphics
       {
-        let latestWindowGeometry = copyFrontmostWindowGeometry(applicationProcessIdentifier)
+        let latestWindowGeometry = readWindowGeometry(applicationProcessIdentifier)
         let currentWindowGeometry = WindowGeometry(
           position: focusedUIElement.windowPosition,
           size: focusedUIElement.windowSize

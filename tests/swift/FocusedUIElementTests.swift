@@ -2,9 +2,34 @@
 // Distributed under the Boost Software License, Version 1.0.
 // (See https://www.boost.org/LICENSE_1_0.txt)
 
+import ApplicationServices
 import XCTest
 
+@MainActor
 final class FocusedUIElementTests: XCTestCase {
+  func testMissingRoleRemainsUnavailable() {
+    XCTAssertNil(makeFocusedUIElement().role)
+  }
+
+  func testEmptyRoleIsNormalisedToNil() {
+    XCTAssertNil(makeFocusedUIElement(roleValue: "" as CFString).role)
+  }
+
+  func testUnreadableRoleRemainsUnavailable() {
+    XCTAssertNil(
+      makeFocusedUIElement(roleValue: "AXTextArea" as CFString, roleError: .cannotComplete).role)
+  }
+
+  func testInvalidRoleTypeRemainsUnavailable() {
+    XCTAssertNil(makeFocusedUIElement(roleValue: 42 as CFNumber).role)
+  }
+
+  func testNonEmptyRolesArePreserved() {
+    for role in ["AXTextArea", "AXButton", "AXUnknown"] {
+      XCTAssertEqual(makeFocusedUIElement(roleValue: role as CFString).role, role)
+    }
+  }
+
   // A Core Graphics geometry update replaces only the window geometry and keeps
   // the geometry source marked as Core Graphics.
   func testUpdatingCoreGraphicsWindowGeometry() {

@@ -10,8 +10,12 @@ targets:
     sources:
       - path: ../../src
       - path: AccessibilityNotificationRefreshScheduleStateTests.swift
+      - path: ApplicationFocusedUIElementTests.swift
       - path: FrontmostProcessIdentifierObservationsTests.swift
       - path: FocusedUIElementTests.swift
+      - path: FocusedUIElementTestSupport.swift
+      - path: FocusedUIElementRetryStateTests.swift
+      - path: MonitorPollingRecoveryTests.swift
       - path: RefreshRequestStateTests.swift
       - path: ResolveFrontmostApplicationTests.swift
       - path: TitleNotificationSynchronizationTests.swift
