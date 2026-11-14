@@ -79,6 +79,11 @@ private struct SnapshotCStringValues {
 }
 
 extension PQRSOSXAccessibility {
+  // Chrome may expose its focused Accessibility element only after reading the
+  // application role activates its native Accessibility interface. Because that
+  // initialisation can complete asynchronously without an AX notification, the
+  // monitor performs a bounded number of full-snapshot retries while the focused
+  // element or its role remains unavailable.
   struct FocusedUIElementRetryState {
     private var processIdentifier: pid_t?
     // nil permits a new recovery attempt; zero records an exhausted attempt.
@@ -270,17 +275,23 @@ extension PQRSOSXAccessibility {
   final class Monitor {
     typealias SnapshotReader =
       @MainActor (
-        FrontmostApplication?,
-        (FrontmostProcessIdentifiers) -> FrontmostProcessIdentifierResolution,
-        (pid_t?, DetectionSource) -> Void
+        _ cachedApplication: FrontmostApplication?,
+        _ resolveProcessIdentifiers: (FrontmostProcessIdentifiers) ->
+          FrontmostProcessIdentifierResolution,
+        _ handleProcessIdentifier: (pid_t?, DetectionSource) -> Void
       ) -> SnapshotCopyResult
 
     static let shared = Monitor()
 
+    // Dependency injection for testing.
     private let readSnapshot: SnapshotReader
+    // Dependency injection for testing.
     private let readProcessIdentifiers: @MainActor () -> FrontmostProcessIdentifiers
+    // Dependency injection for testing.
     private let readWindowGeometry: @MainActor (pid_t) -> WindowGeometry?
+    // Dependency injection for testing.
     private let makeObservationController: @MainActor () -> ObservationController?
+
     private var callback: MonitorCallback?
     private var accessibilityNotificationRefreshTask: Task<Void, Never>?
     private var accessibilityNotificationRefreshScheduleState =
@@ -531,8 +542,10 @@ extension PQRSOSXAccessibility {
       }
 
       let processIdentifiers = readProcessIdentifiers()
-      // AX and NSWorkspace do not always change together. Observe both sources so
-      // an application switch reported by either one schedules a full snapshot.
+      // Check for an application switch before consuming a focused-element retry.
+      // A refresh reads the current frontmost application, and updating the retry
+      // state with its PID cancels the previous application's retry attempt.
+      // AX and NSWorkspace do not always change together, so observe both sources.
       let applicationChanged = processIdentifierObservations.observe(processIdentifiers).changed
       if applicationChanged {
         requestRefresh(force: false)

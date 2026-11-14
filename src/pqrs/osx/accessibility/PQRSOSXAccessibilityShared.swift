@@ -130,7 +130,9 @@ struct FocusedUIElement: Sendable, Equatable {
   init(
     _ context: FocusedUIElementAXContext,
     processIdentifier: pid_t?,
+    // Dependency injection for testing.
     copyValue: AXAttributeReader = copyAttributeValue,
+    // Dependency injection for testing.
     readFallbackWindowGeometry: @MainActor (pid_t) -> WindowGeometry? = copyFrontmostWindowGeometry
   ) {
     let element = context.element
@@ -186,6 +188,7 @@ struct FocusedUIElementAXContext {
   init(
     element: AXUIElement,
     applicationElement: AXUIElement?,
+    // Dependency injection for testing.
     copyValue: AXAttributeReader = copyAttributeValue
   ) {
     self.element = element
@@ -338,6 +341,7 @@ func resolveFrontmostApplication(
 func copyAttribute<T>(
   _ element: AXUIElement,
   _ attribute: CFString,
+  // Dependency injection for testing.
   copyValue: AXAttributeReader = copyAttributeValue
 ) -> T? {
   let (error, value) = copyValue(element, attribute)
@@ -351,6 +355,7 @@ func copyAttribute<T>(
 func copyNonEmptyStringAttribute(
   _ element: AXUIElement,
   _ attribute: CFString,
+  // Dependency injection for testing.
   copyValue: AXAttributeReader = copyAttributeValue
 ) -> String? {
   guard let value: String = copyAttribute(element, attribute, copyValue: copyValue), !value.isEmpty
@@ -364,6 +369,7 @@ func copyNonEmptyStringAttribute(
 func copyAXUIElementAttributeValue(
   _ element: AXUIElement,
   _ attribute: CFString,
+  // Dependency injection for testing.
   copyValue: AXAttributeReader = copyAttributeValue
 ) -> (
   AXError, AXUIElement?
@@ -382,6 +388,7 @@ func copyAXUIElementAttributeValue(
 
 func copyApplicationFocusedUIElement(
   _ applicationElement: AXUIElement,
+  // Dependency injection for testing.
   copyValue: AXAttributeReader = copyAttributeValue
 ) -> AXUIElement? {
   // Chrome activates its native Accessibility interface when the application's
@@ -418,6 +425,7 @@ func copyPid(_ element: AXUIElement) -> pid_t? {
 func copyCGPointAttribute(
   _ element: AXUIElement,
   _ attribute: CFString,
+  // Dependency injection for testing.
   copyValue: AXAttributeReader = copyAttributeValue
 ) -> CGPoint? {
   guard let value: AXValue = copyAttribute(element, attribute, copyValue: copyValue) else {
@@ -439,6 +447,7 @@ func copyCGPointAttribute(
 func copyCGSizeAttribute(
   _ element: AXUIElement,
   _ attribute: CFString,
+  // Dependency injection for testing.
   copyValue: AXAttributeReader = copyAttributeValue
 ) -> CGSize? {
   guard let value: AXValue = copyAttribute(element, attribute, copyValue: copyValue) else {
@@ -459,6 +468,7 @@ func copyCGSizeAttribute(
 
 func copyWindowGeometry(
   _ element: AXUIElement,
+  // Dependency injection for testing.
   copyValue: AXAttributeReader = copyAttributeValue
 ) -> WindowGeometry {
   let position =

@@ -7,20 +7,31 @@ import XCTest
 
 @MainActor
 private final class MonitorPollingFixture {
-  let application = FrontmostApplication(NSRunningApplication.current, detectionSource: .workspace)
+  var application: FrontmostApplication?
+  var processIdentifiers: PQRSOSXAccessibility.FrontmostProcessIdentifiers
   var element: FocusedUIElement?
   var lightweightGeometry: WindowGeometry?
   var snapshotReadCount = 0
   var processIdentifierReadCount = 0
   var lightweightGeometryReadCount = 0
 
+  init() {
+    let application = FrontmostApplication(
+      NSRunningApplication.current,
+      detectionSource: .workspace
+    )
+    self.application = application
+    processIdentifiers = PQRSOSXAccessibility.FrontmostProcessIdentifiers(
+      axPid: application.processIdentifier,
+      workspacePid: application.processIdentifier
+    )
+  }
+
   func makeMonitor() -> PQRSOSXAccessibility.Monitor {
-    let identifiers = PQRSOSXAccessibility.FrontmostProcessIdentifiers(
-      axPid: application.processIdentifier, workspacePid: application.processIdentifier)
     return PQRSOSXAccessibility.Monitor(
       readSnapshot: { _, resolveProcessIdentifiers, _ in
         self.snapshotReadCount += 1
-        _ = resolveProcessIdentifiers(identifiers)
+        _ = resolveProcessIdentifiers(self.processIdentifiers)
         return SnapshotCopyResult(
           snapshot: Snapshot(application: self.application, focusedUIElement: self.element),
           titleNotificationElements: []
@@ -28,7 +39,7 @@ private final class MonitorPollingFixture {
       },
       readProcessIdentifiers: {
         self.processIdentifierReadCount += 1
-        return identifiers
+        return self.processIdentifiers
       },
       readWindowGeometry: { _ in
         self.lightweightGeometryReadCount += 1
@@ -42,6 +53,7 @@ private final class MonitorPollingFixture {
 @MainActor
 final class MonitorPollingRecoveryTests: XCTestCase {
   private struct PublishedSnapshot {
+    let processIdentifier: pid_t?
     let role: String?
     let windowTitle: String?
     let x: Double?
@@ -124,6 +136,37 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     XCTAssertEqual(Self.publishedSnapshots.last?.role, "AXButton")
   }
 
+  func testApplicationSwitchPreemptsRetryAndDelayedRefreshReadsCurrentState() {
+    let fixture = MonitorPollingFixture()
+    fixture.element = makeFocusedUIElement()
+    let monitor = fixture.makeMonitor()
+    defer { monitor.unsetCallback() }
+    start(monitor)
+
+    monitor.refreshIfPollingNeedsSnapshot()
+    XCTAssertEqual(fixture.snapshotReadCount, 2)
+
+    fixture.application = nil
+    fixture.element = nil
+    fixture.processIdentifiers = PQRSOSXAccessibility.FrontmostProcessIdentifiers(
+      axPid: nil,
+      workspacePid: nil
+    )
+    monitor.refreshIfPollingNeedsSnapshot()
+
+    XCTAssertEqual(fixture.snapshotReadCount, 3)
+    XCTAssertNil(Self.publishedSnapshots.last?.processIdentifier)
+
+    // Simulate a delayed notification from the observer that belonged to the
+    // previous frontmost application. It may request another refresh, but the
+    // refresh must read the current state and must not restore the old retry.
+    monitor.requestRefresh(force: false)
+    monitor.refreshIfPollingNeedsSnapshot()
+
+    XCTAssertEqual(fixture.snapshotReadCount, 4)
+    XCTAssertNil(Self.publishedSnapshots.last?.processIdentifier)
+  }
+
   func testInactivePollingPerformsNoAcquisition() {
     let fixture = MonitorPollingFixture()
     let monitor = fixture.makeMonitor()
@@ -178,6 +221,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
       MainActor.assumeIsolated {
         MonitorPollingRecoveryTests.publishedSnapshots.append(
           MonitorPollingRecoveryTests.PublishedSnapshot(
+            processIdentifier: value.pid == 0 ? nil : value.pid,
             role: value.role.map { String(cString: $0) },
             windowTitle: value.window_title.map { String(cString: $0) },
             x: value.has_window_position != 0 ? value.window_position_x : nil,
