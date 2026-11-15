@@ -29,7 +29,7 @@ private final class MonitorPollingFixture {
 
   func makeMonitor() -> PQRSOSXAccessibility.Monitor {
     return PQRSOSXAccessibility.Monitor(
-      readSnapshot: { _, resolveProcessIdentifiers, _ in
+      readSnapshot: { _, _, resolveProcessIdentifiers, _ in
         self.snapshotReadCount += 1
         _ = resolveProcessIdentifiers(self.processIdentifiers)
         return SnapshotCopyResult(
@@ -37,7 +37,7 @@ private final class MonitorPollingFixture {
           titleNotificationElements: []
         )
       },
-      readProcessIdentifiers: {
+      readProcessIdentifiers: { _ in
         self.processIdentifierReadCount += 1
         return self.processIdentifiers
       },
@@ -45,7 +45,7 @@ private final class MonitorPollingFixture {
         self.lightweightGeometryReadCount += 1
         return self.lightweightGeometry
       },
-      makeObservationController: { nil }
+      makeObservationController: { _ in nil }
     )
   }
 }
@@ -179,6 +179,35 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     XCTAssertEqual(fixture.lightweightGeometryReadCount, 0)
   }
 
+  func testFocusedUIElementDisabledDoesNotStartRoleRecoveryPolling() {
+    let fixture = MonitorPollingFixture()
+    fixture.element = makeFocusedUIElement()
+    let monitor = fixture.makeMonitor()
+    defer { monitor.unsetCallback() }
+    start(monitor, monitoringOptions: [.focusedWindow])
+
+    monitor.refreshIfPollingNeedsSnapshot()
+
+    XCTAssertEqual(fixture.snapshotReadCount, 1)
+  }
+
+  func testFocusedWindowDisabledDoesNotPollWindowGeometry() {
+    let fixture = MonitorPollingFixture()
+    fixture.element = makeFocusedUIElement(
+      roleValue: "AXButton" as CFString,
+      windowGeometry: geometry(x: 10)
+    )
+    fixture.lightweightGeometry = geometry(x: 20)
+    let monitor = fixture.makeMonitor()
+    defer { monitor.unsetCallback() }
+    start(monitor, monitoringOptions: [.focusedUIElement])
+
+    monitor.refreshIfPollingNeedsSnapshot()
+
+    XCTAssertEqual(fixture.lightweightGeometryReadCount, 0)
+    XCTAssertEqual(fixture.snapshotReadCount, 1)
+  }
+
   func testStoppedPollingDoesNotAcquireAndRestartHasAFreshBudget() {
     let fixture = MonitorPollingFixture()
     let monitor = fixture.makeMonitor()
@@ -212,24 +241,30 @@ final class MonitorPollingRecoveryTests: XCTestCase {
       position: WindowPosition(x: x, y: 0), size: WindowSize(width: 2 * x, height: 100))
   }
 
-  private func start(_ monitor: PQRSOSXAccessibility.Monitor) {
+  private func start(
+    _ monitor: PQRSOSXAccessibility.Monitor,
+    monitoringOptions: AccessibilityMonitoringOptions = [
+      .frontmostApplication, .focusedUIElement, .focusedWindow,
+    ]
+  ) {
     Self.publishedSnapshots = []
-    monitor.setCallback { _, snapshot in
-      guard let value = snapshot?.pointee else {
-        return
-      }
-      MainActor.assumeIsolated {
-        MonitorPollingRecoveryTests.publishedSnapshots.append(
-          MonitorPollingRecoveryTests.PublishedSnapshot(
-            processIdentifier: value.pid == 0 ? nil : value.pid,
-            role: value.role.map { String(cString: $0) },
-            windowTitle: value.window_title.map { String(cString: $0) },
-            x: value.has_window_position != 0 ? value.window_position_x : nil,
-            width: value.has_window_size != 0 ? value.window_size_width : nil
+    monitor.setCallback(
+      { _, snapshot in
+        guard let value = snapshot?.pointee else {
+          return
+        }
+        MainActor.assumeIsolated {
+          MonitorPollingRecoveryTests.publishedSnapshots.append(
+            MonitorPollingRecoveryTests.PublishedSnapshot(
+              processIdentifier: value.pid == 0 ? nil : value.pid,
+              role: value.role.map { String(cString: $0) },
+              windowTitle: value.window_title.map { String(cString: $0) },
+              x: value.has_window_position != 0 ? value.window_position_x : nil,
+              width: value.has_window_size != 0 ? value.window_size_width : nil
+            )
           )
-        )
-      }
-    }
+        }
+      }, monitoringOptions: monitoringOptions)
     monitor.trigger()
   }
 }

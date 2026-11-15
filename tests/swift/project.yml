@@ -16,6 +16,7 @@ targets:
       - path: FocusedUIElementTestSupport.swift
       - path: FocusedUIElementRetryStateTests.swift
       - path: MonitorPollingRecoveryTests.swift
+      - path: MonitoringOptionsTests.swift
       - path: RefreshRequestStateTests.swift
       - path: ResolveFrontmostApplicationTests.swift
       - path: TitleNotificationSynchronizationTests.swift
