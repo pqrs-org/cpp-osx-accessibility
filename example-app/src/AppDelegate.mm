@@ -179,8 +179,13 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
 - (void)monitoringOptionChanged:(id)sender {
   (void)sender;
 
-  pqrs::osx::accessibility::monitor::terminate_shared_monitor();
-  [self initializeAccessibilityMonitor];
+  if (auto monitor = pqrs::osx::accessibility::monitor::get_shared_monitor().lock()) {
+    monitor->set_configuration({
+        .frontmost_application = self.frontmostApplicationCheckbox.state == NSControlStateValueOn,
+        .focused_ui_element = self.focusedUIElementCheckbox.state == NSControlStateValueOn,
+        .focused_window = self.focusedWindowCheckbox.state == NSControlStateValueOn,
+    });
+  }
 }
 
 - (void)applicationWillTerminate:(NSNotification*)notification {

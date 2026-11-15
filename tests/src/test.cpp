@@ -4,6 +4,17 @@
 int main() {
   using namespace boost::ut;
 
+  "monitor configuration equality"_test = [] {
+    auto a = pqrs::osx::accessibility::monitor::configuration{};
+    auto b = pqrs::osx::accessibility::monitor::configuration{};
+
+    expect(a == b);
+
+    b.focused_window = false;
+
+    expect(a != b);
+  };
+
   "application equality"_test = [] {
     pqrs::osx::accessibility::application a;
     a.set_name("TextEdit")

@@ -14,6 +14,8 @@ private final class MonitorPollingFixture {
   var snapshotReadCount = 0
   var processIdentifierReadCount = 0
   var lightweightGeometryReadCount = 0
+  var snapshotMonitoringOptions: [AccessibilityMonitoringOptions] = []
+  var observationControllerMonitoringOptions: [AccessibilityMonitoringOptions] = []
 
   init() {
     let application = FrontmostApplication(
@@ -29,8 +31,9 @@ private final class MonitorPollingFixture {
 
   func makeMonitor() -> PQRSOSXAccessibility.Monitor {
     return PQRSOSXAccessibility.Monitor(
-      readSnapshot: { _, _, resolveProcessIdentifiers, _ in
+      readSnapshot: { _, monitoringOptions, resolveProcessIdentifiers, _ in
         self.snapshotReadCount += 1
+        self.snapshotMonitoringOptions.append(monitoringOptions)
         _ = resolveProcessIdentifiers(self.processIdentifiers)
         return SnapshotCopyResult(
           snapshot: Snapshot(application: self.application, focusedUIElement: self.element),
@@ -45,7 +48,10 @@ private final class MonitorPollingFixture {
         self.lightweightGeometryReadCount += 1
         return self.lightweightGeometry
       },
-      makeObservationController: { _ in nil }
+      makeObservationController: { monitoringOptions in
+        self.observationControllerMonitoringOptions.append(monitoringOptions)
+        return nil
+      }
     )
   }
 }
@@ -66,7 +72,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     let fixture = MonitorPollingFixture()
     fixture.element = makeFocusedUIElement(windowTitle: "Before", windowGeometry: geometry(x: 10))
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor)
 
     fixture.element = makeFocusedUIElement(windowTitle: "After", windowGeometry: geometry(x: 20))
@@ -85,7 +91,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     let fixture = MonitorPollingFixture()
     fixture.element = makeFocusedUIElement(windowGeometry: geometry(x: 10))
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor)
 
     fixture.element = makeFocusedUIElement(
@@ -105,7 +111,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     let fixture = MonitorPollingFixture()
     fixture.element = makeFocusedUIElement(windowGeometry: geometry(x: 10))
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor)
     for _ in 0..<focusedUIElementRoleRecoveryMaxPolls {
       monitor.refreshIfPollingNeedsSnapshot()
@@ -123,7 +129,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     let fixture = MonitorPollingFixture()
     fixture.element = makeFocusedUIElement(roleValue: "" as CFString)
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor)
     XCTAssertEqual(Self.publishedSnapshots.count, 1)
     XCTAssertNil(Self.publishedSnapshots.last?.role)
@@ -140,7 +146,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     let fixture = MonitorPollingFixture()
     fixture.element = makeFocusedUIElement()
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor)
 
     monitor.refreshIfPollingNeedsSnapshot()
@@ -170,7 +176,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
   func testInactivePollingPerformsNoAcquisition() {
     let fixture = MonitorPollingFixture()
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
 
     monitor.refreshIfPollingNeedsSnapshot()
 
@@ -183,7 +189,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     let fixture = MonitorPollingFixture()
     fixture.element = makeFocusedUIElement()
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor, monitoringOptions: [.focusedWindow])
 
     monitor.refreshIfPollingNeedsSnapshot()
@@ -199,7 +205,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     )
     fixture.lightweightGeometry = geometry(x: 20)
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor, monitoringOptions: [.focusedUIElement])
 
     monitor.refreshIfPollingNeedsSnapshot()
@@ -211,12 +217,12 @@ final class MonitorPollingRecoveryTests: XCTestCase {
   func testStoppedPollingDoesNotAcquireAndRestartHasAFreshBudget() {
     let fixture = MonitorPollingFixture()
     let monitor = fixture.makeMonitor()
-    defer { monitor.unsetCallback() }
+    defer { monitor.unsetCallback(generation: 0) }
     start(monitor)
     for _ in 0..<focusedUIElementRoleRecoveryMaxPolls {
       monitor.refreshIfPollingNeedsSnapshot()
     }
-    monitor.unsetCallback()
+    monitor.unsetCallback(generation: 0)
     let processReadsBeforeStop = fixture.processIdentifierReadCount
     let snapshotReadsBeforeStop = fixture.snapshotReadCount
 
@@ -236,6 +242,69 @@ final class MonitorPollingRecoveryTests: XCTestCase {
       fixture.snapshotReadCount, snapshotReadsBeforeStop + 1 + focusedUIElementRoleRecoveryMaxPolls)
   }
 
+  func testSetMonitoringOptionsRebuildsMonitoringWithNewOptions() {
+    let fixture = MonitorPollingFixture()
+    let monitor = fixture.makeMonitor()
+    defer { monitor.unsetCallback(generation: 42) }
+
+    start(monitor, monitoringOptions: [.focusedUIElement], generation: 42)
+    monitor.setMonitoringOptions([.focusedWindow], generation: 42)
+
+    XCTAssertEqual(
+      fixture.snapshotMonitoringOptions,
+      [.focusedUIElement, .focusedWindow]
+    )
+    XCTAssertEqual(
+      fixture.observationControllerMonitoringOptions,
+      [.focusedUIElement, .focusedWindow]
+    )
+  }
+
+  func testSetMonitoringOptionsDoesNothingWhileInactive() {
+    let fixture = MonitorPollingFixture()
+    let monitor = fixture.makeMonitor()
+
+    start(monitor, monitoringOptions: [.focusedUIElement])
+    monitor.unsetCallback(generation: 0)
+    monitor.setMonitoringOptions([.focusedWindow], generation: 0)
+
+    XCTAssertEqual(fixture.snapshotMonitoringOptions, [.focusedUIElement])
+    XCTAssertEqual(fixture.observationControllerMonitoringOptions, [.focusedUIElement])
+  }
+
+  func testSetMonitoringOptionsDoesNothingWhenOptionsAreUnchanged() {
+    let fixture = MonitorPollingFixture()
+    let monitor = fixture.makeMonitor()
+    defer { monitor.unsetCallback(generation: 0) }
+
+    start(monitor, monitoringOptions: [.focusedUIElement])
+    monitor.setMonitoringOptions([.focusedUIElement], generation: 0)
+
+    XCTAssertEqual(fixture.snapshotMonitoringOptions, [.focusedUIElement])
+    XCTAssertEqual(fixture.observationControllerMonitoringOptions, [.focusedUIElement])
+  }
+
+  func testOperationsFromStaleGenerationDoNotAffectCurrentMonitor() {
+    let fixture = MonitorPollingFixture()
+    let monitor = fixture.makeMonitor()
+    defer { monitor.unsetCallback(generation: 2) }
+
+    start(monitor, monitoringOptions: [.focusedUIElement], generation: 2)
+
+    monitor.setMonitoringOptions([.focusedWindow], generation: 1)
+    monitor.trigger(generation: 1)
+    monitor.unsetCallback(generation: 1)
+
+    // The current generation remains active with its original configuration.
+    monitor.trigger(generation: 2)
+
+    XCTAssertEqual(
+      fixture.snapshotMonitoringOptions,
+      [.focusedUIElement, .focusedUIElement]
+    )
+    XCTAssertEqual(fixture.observationControllerMonitoringOptions, [.focusedUIElement])
+  }
+
   private func geometry(x: Double) -> WindowGeometry {
     WindowGeometry(
       position: WindowPosition(x: x, y: 0), size: WindowSize(width: 2 * x, height: 100))
@@ -245,7 +314,8 @@ final class MonitorPollingRecoveryTests: XCTestCase {
     _ monitor: PQRSOSXAccessibility.Monitor,
     monitoringOptions: AccessibilityMonitoringOptions = [
       .frontmostApplication, .focusedUIElement, .focusedWindow,
-    ]
+    ],
+    generation: UInt64 = 0
   ) {
     Self.publishedSnapshots = []
     monitor.setCallback(
@@ -264,7 +334,7 @@ final class MonitorPollingRecoveryTests: XCTestCase {
             )
           )
         }
-      }, monitoringOptions: monitoringOptions)
-    monitor.trigger()
+      }, monitoringOptions: monitoringOptions, generation: generation)
+    monitor.trigger(generation: generation)
   }
 }
