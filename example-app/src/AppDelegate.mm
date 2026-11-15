@@ -62,6 +62,9 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
 @property(strong) NSTextField* applicationLabel;
 @property(strong) NSTextField* roleLabel;
 @property(strong) NSTextField* detailLabel;
+@property(strong) NSButton* frontmostApplicationCheckbox;
+@property(strong) NSButton* focusedUIElementCheckbox;
+@property(strong) NSButton* focusedWindowCheckbox;
 
 @end
 
@@ -80,7 +83,19 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
   }
 
   pqrs::dispatcher::extra::initialize_shared_dispatcher();
-  pqrs::osx::accessibility::monitor::initialize_shared_monitor(pqrs::dispatcher::extra::get_shared_dispatcher());
+  [self initializeAccessibilityMonitor];
+}
+
+- (void)initializeAccessibilityMonitor {
+  pqrs::osx::accessibility::monitor::configuration configuration{
+      .frontmost_application = self.frontmostApplicationCheckbox.state == NSControlStateValueOn,
+      .focused_ui_element = self.focusedUIElementCheckbox.state == NSControlStateValueOn,
+      .focused_window = self.focusedWindowCheckbox.state == NSControlStateValueOn,
+  };
+
+  pqrs::osx::accessibility::monitor::initialize_shared_monitor(
+      pqrs::dispatcher::extra::get_shared_dispatcher(),
+      configuration);
 
   if (auto monitor = pqrs::osx::accessibility::monitor::get_shared_monitor().lock()) {
     AppDelegate* appDelegate = self;
@@ -161,6 +176,13 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
   }
 }
 
+- (void)monitoringOptionChanged:(id)sender {
+  (void)sender;
+
+  pqrs::osx::accessibility::monitor::terminate_shared_monitor();
+  [self initializeAccessibilityMonitor];
+}
+
 - (void)applicationWillTerminate:(NSNotification*)notification {
   (void)notification;
 
@@ -174,7 +196,7 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
 }
 
 - (void)buildWindow {
-  self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 360)
+  self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 440)
                                             styleMask:(NSWindowStyleMaskTitled |
                                                        NSWindowStyleMaskClosable |
                                                        NSWindowStyleMaskMiniaturizable |
@@ -196,12 +218,33 @@ NSString* makeDetectionSourceString(pqrs::osx::accessibility::application::detec
 
   auto contentView = self.window.contentView;
 
-  auto headingLabel = makeLabel(NSMakeRect(20, 310, 640, 24), 20, NSColor.labelColor);
+  auto headingLabel = makeLabel(NSMakeRect(20, 390, 640, 24), 20, NSColor.labelColor);
   headingLabel.stringValue = @"Frontmost application and focused element";
   [contentView addSubview:headingLabel];
 
-  self.permissionLabel = makeLabel(NSMakeRect(20, 276, 640, 20), 12, NSColor.secondaryLabelColor);
+  self.permissionLabel = makeLabel(NSMakeRect(20, 356, 640, 20), 12, NSColor.secondaryLabelColor);
   [contentView addSubview:self.permissionLabel];
+
+  self.frontmostApplicationCheckbox = [NSButton checkboxWithTitle:@"Supplement frontmost application detection with Accessibility"
+                                                           target:self
+                                                           action:@selector(monitoringOptionChanged:)];
+  self.frontmostApplicationCheckbox.frame = NSMakeRect(20, 324, 640, 20);
+  self.frontmostApplicationCheckbox.state = NSControlStateValueOn;
+  [contentView addSubview:self.frontmostApplicationCheckbox];
+
+  self.focusedUIElementCheckbox = [NSButton checkboxWithTitle:@"Monitor focused UI element"
+                                                       target:self
+                                                       action:@selector(monitoringOptionChanged:)];
+  self.focusedUIElementCheckbox.frame = NSMakeRect(20, 298, 640, 20);
+  self.focusedUIElementCheckbox.state = NSControlStateValueOn;
+  [contentView addSubview:self.focusedUIElementCheckbox];
+
+  self.focusedWindowCheckbox = [NSButton checkboxWithTitle:@"Monitor focused window"
+                                                    target:self
+                                                    action:@selector(monitoringOptionChanged:)];
+  self.focusedWindowCheckbox.frame = NSMakeRect(20, 272, 640, 20);
+  self.focusedWindowCheckbox.state = NSControlStateValueOn;
+  [contentView addSubview:self.focusedWindowCheckbox];
 
   self.applicationLabel = makeLabel(NSMakeRect(20, 164, 640, 96), 13, NSColor.labelColor);
   self.applicationLabel.usesSingleLineMode = NO;
